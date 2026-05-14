@@ -5,6 +5,7 @@ from discord.ext import commands
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from autoposts_utils import build_autopost_dict
+from event_post_text import access_roles
 
 
 class PostScheduler(commands.Cog):
@@ -96,6 +97,7 @@ class PostScheduler(commands.Cog):
 
 
     @app_commands.command(name="list_all_autoposts", description="Test command for seeing existing scheduled tasks.")
+    @discord.app_commands.checks.has_any_role(*access_roles)
     async def list_all_autoposts(self, interaction: discord.Interaction):
         self.interaction = interaction
         self.scheduler.print_jobs()
@@ -110,6 +112,7 @@ class PostScheduler(commands.Cog):
 
 
     @app_commands.command(name="cancel_all_posts", description="Test command for cancelling existing scheduled tasks.")
+    @discord.app_commands.checks.has_any_role(*access_roles)
     async def cancel_all_posts(self, interaction: discord.Interaction):
         self.interaction = interaction
         self.scheduler.remove_all_jobs()
@@ -117,6 +120,7 @@ class PostScheduler(commands.Cog):
 
 
     @app_commands.command(name="list_autopost_events", description="Test command for seeing existing scheduled events (grouped by event name).")
+    @discord.app_commands.checks.has_any_role(*access_roles)
     async def list_autopost_events(self, interaction: discord.Interaction):
         self.interaction = interaction
         event_list = self.events_job_list(self.scheduler)
@@ -130,6 +134,7 @@ class PostScheduler(commands.Cog):
 
 
     @app_commands.command(name="cancel_event_posts", description="Test command for cancelling existing scheduled tasks for a given event.")
+    @discord.app_commands.checks.has_any_role(*access_roles)
     async def cancel_event_posts(self, interaction: discord.Interaction, event_name: str):
         self.interaction = interaction
         job_list = self.scheduler.get_jobs()
@@ -142,6 +147,17 @@ class PostScheduler(commands.Cog):
         else:
             await interaction.response.send_message(f"All scheduled posts for event {event_name} cancelled.")
 
+    @list_all_autoposts.error
+    @cancel_all_posts.error
+    @list_autopost_events.error
+    @cancel_event_posts.error
+    async def role_error(self, interaction: discord.Interaction, error):
+        if isinstance(error, app_commands.MissingAnyRole):
+            await interaction.response.send_message(
+                "This command is Circuit Crew only. Hit up a mod if you want to join Circuit Crew.",
+                ephemeral=True
+                )
+        else: raise error
 
     async def cog_load(self):
             self.cancel_event_posts.autocomplete("event_name")(self.eventpost_autocomplete)

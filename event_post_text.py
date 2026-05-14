@@ -2,6 +2,15 @@
 This module contains text information used in developing a posts for regular weekly events
 """
 
+access_roles = [
+    1504297025615822909, # TestRole, in lurchin' about
+    1370902782860726362, # Circuit Crew
+    1379213282984071169, # FZD Luminary
+    1203448624000798750, # Staff Ghost
+    1152973858773663744, # Mr. Zero
+    1175813598040297483, # Captain Fox
+]
+
 prix_info = [
     {"shortname": "knight", "fullname": "Knight League", "emoji": ":GPKnight:", "mirror_emoji": "", "tickets": 3, "mode": "99"},
     {"shortname": "mknight", "fullname": "Mirror Knight League", "emoji": ":GPMirrorKnight:", "mirror_emoji": ":Mirror:", "tickets": 3, "mode": "99"},

@@ -7,7 +7,7 @@ from discord.ext import commands
 from fzd_db import get_db_connection, get_event_schedule
 from hostpost_views import WizardView
 from build_hostposts import build_posts
-from event_post_text import events, help_text
+from event_post_text import events, help_text, access_roles
 from autopost_commands import PostScheduler
 
 ''' Output for Draft Posts '''
@@ -67,7 +67,6 @@ class EventBuilder(commands.Cog):
     ''' Autocomplete methods '''
     async def event_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         options = [event for event in self.event_list if current.lower() in event.lower()]
-        print(options)
 
         # Return up to 25 results (25=discord limit)
         return [app_commands.Choice(name=event, value=f"{event}") for event in options[:25]]
@@ -76,8 +75,10 @@ class EventBuilder(commands.Cog):
         options = ["Simple", "Custom"]
         return [app_commands.Choice(name=option, value=f"{option}") for option in options if current.lower() in option.lower()]
     
+    
 
     @app_commands.command(name="event_setup", description="Select event to prepare hosting posts for.")
+    @discord.app_commands.checks.has_any_role(*access_roles)
     async def event_setup(self, interaction: discord.Interaction, event: str, num_prix: int, timetype: str = "Simple"):
         if num_prix < 1 or num_prix > 10:
             await interaction.response.send_message("Please choose between 1 and 10.", ephemeral=True)
@@ -143,12 +144,20 @@ class EventBuilder(commands.Cog):
     @app_commands.command(name="help", description="Information about the HostPost bot.")
     async def help(self, interaction: discord.Interaction):
         await interaction.response.send_message(help_text, ephemeral=False)
+ 
+    @event_setup.error
+    async def role_error(self, interaction: discord.Interaction, error):
+        if isinstance(error, app_commands.MissingAnyRole):
+            await interaction.response.send_message(
+                "This command is Circuit Crew only. Hit up a mod if you want to join Circuit Crew.",
+                ephemeral=True
+                )
+        else: raise error
 
 
     async def cog_load(self):
         self.event_setup.autocomplete("event")(self.event_autocomplete)
         self.event_setup.autocomplete("timetype")(self.timetype_autocomplete)
-        # self.event_setup.autocomplete("offset")(self.time_offset_autocomplete)
 
 
 async def setup(bot: commands.Bot):
