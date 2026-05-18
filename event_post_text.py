@@ -11,6 +11,8 @@ access_roles = [
     1175813598040297483, # Captain Fox
 ]
 
+automatable_posts = ["1hr", "10min", "go_post"]
+
 prix_info = [
     {"shortname": "knight", "fullname": "Knight League", "emoji": ":GPKnight:", "mirror_emoji": "", "tickets": 3, "mode": "99"},
     {"shortname": "mknight", "fullname": "Mirror Knight League", "emoji": ":GPMirrorKnight:", "mirror_emoji": ":Mirror:", "tickets": 3, "mode": "99"},
@@ -49,7 +51,7 @@ events = [
     {"shortname": "friday_na", "fullname": "Friday NA GP", # fzd_dev="Friday FZD NA"; fzd_prod=""Friday NA GP"
      "score_channel": "https://discordapp.com/channels/1019374132342816800/1212468778609147976",
      "announcement_intro": "# Friday NA FZD GP starts {0} at {1}! :BFZ: \n<@&1197169889417371689>  Welcome back to another THRILLING addition of Friday FZD Americas!\n## Schedule\n", 
-     "announcement_outro": "Be sure to join IMMEDIATELY when the lobby opens!\nYou will need **{0} {1} tickets** for this event.\n\nReminders will be posted on <#1185690454658912397>\n\nJoin the live broadcast and commentating over at https://www.twitch.tv/fzdlive"
+     "announcement_outro": "Be sure to join IMMEDIATELY when the lobby opens!\nYou will need **{0} {1} tickets** for this event.\n\nReminders will be posted on <#1185690454658912397>"
      },
     {"shortname": "ead", "fullname": "Euro-Asia Drift",
      "score_channel": "https://discordapp.com/channels/1019374132342816800/1289209764307406909",
@@ -68,7 +70,7 @@ events = [
      },
     {"shortname": "apac", "fullname": "Asia-Pacific Open", 
      "score_channel": "https://discordapp.com/channels/1019374132342816800/1228660432307490846",
-     "announcement_intro": "### The :flag_au: :flag_jp: Asia Pacific Open starts {0} at {1}! :READY:\n<@&1197169889417371689> Prepare yourself for intense competition! In this event, perfect for the Pacific-adjacent, we'll run highly competitive races.\n## Schedule\n", 
+     "announcement_intro": "# The :flag_au: :flag_jp: Asia Pacific Open starts {0} at {1}! :READY:\n<@&1197169889417371689> Prepare yourself for intense competition! In this event, perfect for the Pacific-adjacent, we'll run highly competitive races.\n## Schedule\n", 
      "announcement_outro": "Submit your scores at https://discord.com/channels/1019374132342816800/1228660432307490846 to see how well you did! Good luck and see you on the racetrack!\n\nYou will need **{0} {1} tickets** for this event."
      },
     {"shortname": "classic_mm", "fullname": "Classic Machine Mastery",

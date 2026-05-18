@@ -46,10 +46,51 @@ def build_posts(event_name: str, prix_list: list[dict[str, any]]):
     go_posts, results_posts = build_gp_posts(event_name, prix_list)
 
     # Build event results post
-    event_results_post = f"Results Post```# {event_name.upper()} RESULTS ARE IN!\nAnd three pilots emerge victorious:\n## :trophy: 1st Place – @[]: X,XXX Points\n## :second_place: 2nd Place – @[]: X,XXX Points\n## :third_place: 3rd Place – @[]: X,XXX Points\nCongratulations to the [] for their performances in a rough set of prix, and thank you to everyone who participated!```"
+    event_results_post = f"""
+    Results Post```# {event_name.upper()} \
+RESULTS ARE IN!\nAnd three pilots emerge victorious:\n\
+## :trophy: 1st Place – @[first]: [firstpoints] Points\n\
+## :second_place: 2nd Place – @[second]: [secondpoints] Points\n\
+## :third_place: 3rd Place – @[third]: [thirdpoints] Points\n\
+Congratulations to @(first), @(second), and @(third) for their \
+performances in a rough set of prix, and thank you \
+to everyone who participated!```"""
     
-    return [hour_post], go_posts, results_posts, [event_results_post]
+    # Build post structure
+    post_struct = []
+    post_struct.append({
+        "name": "1 Hour Post",
+        "post_text": hour_post,
+        "post_type": "1hr"
+    })
+    # Replace hour post header withe 10 min post header
+    header_index = hour_post.find('`')
+    if header_index != 1:
+        ten_min_post = "10 Minute Post" + hour_post[header_index:]
+    post_struct.append({
+        "name": "10 Minute Post",
+        "post_text": ten_min_post,
+        "post_type": "10min"
+    })
+    for index, post in enumerate(go_posts):
+        post_struct.append({
+            "name": f"Prix #{index+1} Post",
+            "post_text": post,
+            "post_type": "go_post"
+        })
+        post_struct.append({
+            "name": f"Prix #{index+1} Results",
+            "post_text": results_posts[index],
+            "post_type": "results_post"
+        })
+    post_struct.append({
+        "name": "Event Results Post",
+        "post_text": event_results_post,
+        "post_type": "event_results"
+    })
 
+    # return [hour_post], go_posts, results_posts, [event_results_post]
+    return post_struct
 
 def build_schedule(prix_list: list[dict[str, any]]) -> str:
     # Build the multi-line schedule text for the event post based on the prix list and the schedule_line templates.

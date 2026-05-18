@@ -122,3 +122,30 @@ async def get_event_schedule(db):
     sql_events="SELECT event, utc_start, utc_end FROM vw_list_scheduled_events"
     events = await execute_query(db, sql_events, params=None, fetch="all", isProc=False)
     return events
+
+async def get_scheduled_event_id(db, scheduled_event_name):
+    """ Gets the id given a name scheduled_events
+    """
+    sql_scheduled_event_id = """SELECT id
+                                FROM events_scheduled
+                                WHERE display_name = %s   
+                            """
+    params = (scheduled_event_name,)
+    event_id = await execute_query(db, sql_scheduled_event_id, params=params, fetch="one")
+    return event_id["id"]
+
+async def get_event_scores(db, scheduled_event_id):
+    """ Gets the users and their scores from the selected event 
+    """
+    sql_event_scores = """SELECT users.tag AS name,
+                                CAST(r.user_id AS CHAR) AS user_id,
+                                users.discord_user_id AS discord_name,
+                                CAST(SUM(r.score) AS CHAR) AS score
+                            FROM event_result_points r
+                            INNER JOIN users ON r.user_id = users.id
+                            WHERE scheduled_event_id = %s 
+                            GROUP BY r.user_id
+                            ORDER BY SUM(r.score) DESC
+                        """
+    params = (scheduled_event_id,)
+    return await execute_query(db, sql_event_scores, params=params, isProc=False)

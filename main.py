@@ -15,10 +15,12 @@ GUILD_ID = discord.Object(id=os.getenv('SERVER_ID'))
 handler = logging.FileHandler(filename='hostbot.log', encoding='utf-8', mode='w')
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 class HostBot(commands.Bot):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.job_stack = []
 
     async def setup_hook(self):
         """Called automatically at startup, safe for async setup."""

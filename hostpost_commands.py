@@ -1,6 +1,6 @@
 
-import os, io
-from datetime import datetime, timezone
+import os, traceback
+from datetime import timezone
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -8,54 +8,7 @@ from fzd_db import get_db_connection, get_event_schedule
 from hostpost_views import WizardView
 from build_hostposts import build_posts
 from event_post_text import events, help_text, access_roles
-from autopost_commands import PostScheduler
-
-''' Output for Draft Posts '''
-async def post_draft_posts_to_discord(
-    interaction: discord.Interaction, 
-    hour_post: list[str], 
-    go_posts: list[str], 
-    results_posts: list[str], 
-    event_results_post: list[str]
-    ):
-    # Send hour posts
-    await interaction.followup.send(hour_post[0], ephemeral=False)
-    if len(go_posts) == len(results_posts):
-        # interlace posts
-        for index, post in enumerate(go_posts):
-            await interaction.followup.send(post, ephemeral=False)
-            await interaction.followup.send(results_posts[index], ephemeral=False)
-    else:
-        raise Exception(
-            f"Internal error: lists of prix initiation (length = {len(go_posts)}) and results posts (length = {len(results_posts)})are different lengths."
-            )
-    await interaction.followup.send(event_results_post[0], ephemeral=False)
-
-async def post_post_textfile(
-    interaction: discord.Interaction, 
-    event: str, 
-    event_start_time: datetime, 
-    hour_post: list[str], 
-    go_posts: list[str], 
-    results_posts: list[str], 
-    event_results_post: list[str]
-    ):
-    # Create the large string object for writing to file.
-    post_text = hour_post[0] + "\n\n"
-    for index, post in enumerate(go_posts):
-        post_text += post + "\n\n"
-        post_text += results_posts[index] + "\n\n"
-    post_text += event_results_post[0]
-    
-    ''' Write to text file '''
-    filename = event + "_" + event_start_time.strftime("%Y-%m-%d %H:%M:%S") + "_posts.txt"
-    # Convert text into a byte stream
-    buffer = io.BytesIO(post_text.encode('utf-8'))
-    # Send it directly
-    await interaction.followup.send(
-        f"Posts written to attached file {filename} for your records.", 
-        file=discord.File(fp=buffer, filename=filename)
-        )
+from hostpost_exports import prepare_post_outputs
 
 
 ''' Event Builder Command Cog Class '''
@@ -76,10 +29,11 @@ class EventBuilder(commands.Cog):
         return [app_commands.Choice(name=option, value=f"{option}") for option in options if current.lower() in option.lower()]
     
     
-
+    ''' Slash Commands '''
     @app_commands.command(name="event_setup", description="Select event to prepare hosting posts for.")
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def event_setup(self, interaction: discord.Interaction, event: str, num_prix: int, timetype: str = "Simple"):
+        offer_edits = False # initialize to not allow editing of event messages
         if num_prix < 1 or num_prix > 10:
             await interaction.response.send_message("Please choose between 1 and 10.", ephemeral=True)
             return
@@ -113,29 +67,21 @@ class EventBuilder(commands.Cog):
                     return
                 
                 # Build posts using functions in module build_hostposts.
-                event_start_time = view.all_results[0]["time"]
-                hour_post, go_posts, results_posts, event_results_post = build_posts(event, view.all_results)
+                post_struct = build_posts(event, view.all_results)
                 
-                # Distribute Posts
-                ## To the interaction channel as separate posts
-                await post_draft_posts_to_discord(interaction, hour_post, go_posts, results_posts, event_results_post)
-                ## To the interaction channel as a text file
-                await post_post_textfile(interaction, event, event_start_time, hour_post, go_posts, results_posts, event_results_post)
-                ## To the scheduled autoposter, if user selects it.
-                print(f"The user selected autopost?: {view.autopost}.")
-                if view.autopost:
-                    # Run the scheduler module.
-                    #   v1 only posts hour_post and go_posts
-                    #   v2 allows user interaction on results posts through slash commands.
-                    # We are currently in v1.
-                    ps = PostScheduler(self.bot)
-                    await ps.post_scheduler(event, hour_post, go_posts, view.all_results)
-    
+                await prepare_post_outputs(
+                    self.bot,
+                    interaction,
+                    event, 
+                    post_struct, 
+                    view.all_results, 
+                    view.autopost)
+                
                 event_prixinfo = view.all_results
-                print(f"Prix info collected for {event}: {event_prixinfo}")
 
         except Exception as e:
             print(f"Exception in event_posts: {e}")
+            traceback.print_exc()
             await interaction.followup.send(
                    "❌  ERROR! currently undefined error",
                   ephemeral=True 
@@ -144,7 +90,8 @@ class EventBuilder(commands.Cog):
     @app_commands.command(name="help", description="Information about the HostPost bot.")
     async def help(self, interaction: discord.Interaction):
         await interaction.response.send_message(help_text, ephemeral=False)
- 
+    
+    # Error handling for if user does not have appropriate role
     @event_setup.error
     async def role_error(self, interaction: discord.Interaction, error):
         if isinstance(error, app_commands.MissingAnyRole):
@@ -162,7 +109,8 @@ class EventBuilder(commands.Cog):
 
 async def setup(bot: commands.Bot):
     GUILD_ID=discord.Object(id=os.getenv('SERVER_ID'))
-    # initialize list of events
+    # Initialize list of events. This is updated during slash command. Initialization and 
+    # update are necessary to not have to continually pull from the database during autocomplete.
     async with get_db_connection() as db:
         available_event_dict = await get_event_schedule(db)
     event_list = [s['event'] for s in available_event_dict if 'event' in s]
