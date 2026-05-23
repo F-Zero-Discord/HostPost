@@ -47,8 +47,8 @@ def build_autopost_dict(event: str, post_struct: list[dict], prix_info: list[dic
 
     # Get discord channels where posts will go. Note: test and production channels are toggled directly in the .env file.
     load_dotenv()
-    hour_post_channel = discord.Object(id=os.getenv('ANNOUNCE_CHANNEL'))
-    other_post_channel = discord.Object(id=os.getenv('ENGAGE_CHANNEL'))
+    hour_post_channel = discord.Object(id=int(os.getenv('ANNOUNCE_CHANNEL')))
+    other_post_channel = discord.Object(id=int(os.getenv('ENGAGE_CHANNEL')))
 
     autoposts: list[dict] = []
     start_time = prix_info[0]['time']
@@ -121,6 +121,12 @@ def build_autopost_dict(event: str, post_struct: list[dict], prix_info: list[dic
         # Set all post times to be test_interval seconds apart starting from now for testing purposes.
         start_time = datetime.now(timezone.utc)
         for index, post in enumerate(autoposts):
+            # Comment the line below out to test using normal timings but no pings
             post['time'] = start_time + timedelta(seconds=test_interval * (index + 1))
+            # Replace any @Events pings
+            post['text'] =  post['text'].replace('<@&1197169889417371689>', '<events test ping>')
+            # Replace any @Classic Events pings
+            post['text'] =  post['text'].replace('<@&1343646386981437561>', '<classic test ping>')
+
     return autoposts
 

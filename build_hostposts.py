@@ -8,7 +8,7 @@ Functions in this module take the following to build posts for regular weekly ev
 import random
 from datetime import datetime, timedelta
 from hostpost_utils import discord_timestamp, round_to_30_minutes
-from event_post_text import prix_info, schedule_line, events
+from event_post_text import prix_info, schedule_line, events, custom_text, clean_driving_list
 # from pengbot_addons import event_post_text
 
 def build_posts(event_name: str, prix_list: list[dict[str, any]]):
@@ -35,8 +35,10 @@ def build_posts(event_name: str, prix_list: list[dict[str, any]]):
     hour_post += event_info.get("announcement_intro").format(
         discord_timestamp(prix_list[0]["time"], "relative"), discord_timestamp(prix_list[0]["time"], "short"))
     hour_post += build_schedule(prix_list)
+    if prix_list[0]["prix"] in clean_driving_list:
+        hour_post += [item["clean_driving"] for item in custom_text][0]
     hour_post += event_info.get("announcement_outro").format(
-        ":Ticket:" if tickets_needed == 1 else ":Tickets:", tickets_needed)
+        "<:Tickets:1218943498338697256>" if tickets_needed == 1 else "<:Tickets:1218943498338697256>", tickets_needed)
     
     # Note: passing this as a string for current testing purposes. Will ultimately return a list of strings, with 
     # each string being a post.
@@ -127,9 +129,9 @@ def build_gp_posts(event_name: str, prix_list: list[dict[str, any]]) -> list[str
         
         # Determine ticket text based on number of tickets needed for the prix.
         if prix_dict['tickets'] == 1:
-            ticket_text = ":Ticket:"
+            ticket_text = "<:Ticket:1194747589610967131>"
         else:
-            ticket_text = ":Tickets:"
+            ticket_text = "<:Tickets:1218943498338697256>"
         
         # Determine role called based on mode ("99" or "classic")
         if prix_dict["mode"] == "classic":
@@ -141,10 +143,10 @@ def build_gp_posts(event_name: str, prix_list: list[dict[str, any]]) -> list[str
         match prix["prix_type"]:
             case "public":
                 # Build the post using the prix_dict info and the event_name. This is where we would also include any special instructions for certain prix types (e.g. "Be sure to join immediately when the lobby opens for Cracked Cup!")
-                go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} {ticket_text} Public {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts SOON, {discord_timestamp(prix['time'], 'relative')}! :READY: :GO:\n## Join as soon as the prix opens!```")
+                go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} {ticket_text} Public {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts SOON, {discord_timestamp(prix['time'], 'relative')}! <:READY:1226990432454578277> <:GO:1226991337723662497>\n## Join as soon as the prix opens!```")
             case "private":
                 # Build the post using the prix_dict info and the event_name. This is where we would also include any special instructions for certain prix types.
-                go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} :Private: Private {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts NOW! :GO:\n## :Private: Passcode: {str(random.randint(0,9999)).zfill(4)} :Private:```")
+                go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} <:Private:1227046530721251479> Private {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts NOW! <:GO:1226991337723662497>\n## <:Private:1227046530721251479> Passcode: {str(random.randint(0,9999)).zfill(4)} <:Private:1227046530721251479>```")
         # Build score-recording string differently for last prix in event
         if prix_list.index(prix) + 1 == len(prix_list):
             # round to nearest 30 minutes and subtract 1 minute to get scoreboard close time
@@ -153,5 +155,5 @@ def build_gp_posts(event_name: str, prix_list: list[dict[str, any]]) -> list[str
         else:
             next_prix_dict = next((item for item in prix_info if item["shortname"] == prix_list[prix_list.index(prix) + 1]["prix"]), None)
             scoring_text = f"Head over to {score_channel} to submit your scores!\nThe {prix_list[prix_list.index(prix) + 1]['prix_type'].capitalize()} {next_prix_dict['emoji']} {next_prix_dict['mirror_emoji']} {next_prix_dict['fullname']} will start {discord_timestamp(prix_list[prix_list.index(prix) + 1]['time'], 'relative')}!```"
-        results_posts.append(f"Prix #{prix_list.index(prix) + 1} Results```# :1st: Congratulations @[Player] for winning the {prix['prix_type'].capitalize()} {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']}!\n{scoring_text}")
+        results_posts.append(f"Prix #{prix_list.index(prix) + 1} Results```# <:1st:1201576405339754546> Congratulations @[Player] for winning the {prix['prix_type'].capitalize()} {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']}!\n{scoring_text}")
     return go_posts, results_posts

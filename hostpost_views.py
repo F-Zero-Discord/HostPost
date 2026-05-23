@@ -192,7 +192,7 @@ class WizardView(discord.ui.View):
         self.add_item(manual_button)
 
         await interaction.response.edit_message(
-            content="### :bangbang: Would you like to the bot to push the announcement and prix opening posts automatically? (Note that prix and event results posts continue to require manual posting)", 
+            content="### :bangbang: Would you like to the bot to push the announcement and prix opening posts automatically? (Note that prix and event results posts continue to require manual intervention through slash commands.)", 
             view=self
         )
 
@@ -202,6 +202,11 @@ class WizardView(discord.ui.View):
     )
     async def select_choice(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.current_prix = select.values[0]
+
+        # 2. Update the visual state so the selection sticks!
+        for option in select.options:
+            option.default = (option.value == self.current_prix)
+
         # Immediately update the message so the interaction is "consumed" successfully
         await interaction.response.edit_message(content=self.get_content(), view=self)
 
@@ -212,6 +217,10 @@ class WizardView(discord.ui.View):
     )
     async def select_time(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.time_offset = select.values[0]
+
+        # Update the visual state for the time menu
+        for option in select.options:
+            option.default = (option.value == int(self.time_offset))
         # Immediately update the message
         await interaction.response.edit_message(content=self.get_content(), view=self)
 
@@ -228,6 +237,9 @@ class WizardView(discord.ui.View):
     )
     async def select_prixtype(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.prixtype = select.values[0]
+
+        for option in select.options:
+            option.default = (option.value == self.prixtype)
         # Immediately update the message
         await interaction.response.edit_message(content=self.get_content(), view=self)
 
@@ -242,6 +254,20 @@ class WizardView(discord.ui.View):
         # Setting prix_type to "public" in anticipation of future private prix functionality.
         self.all_results.append({"prix": self.current_prix, "time": updated_time, "prix_type": self.prixtype})
         self.current_step += 1
+        
+        # Reset for the next round of choices
+        # Clean up the Choice dropdown
+        for option in self.select_choice.options:
+            option.default = False
+            
+        # Clean up the Time dropdown (if it exists/is being used)
+        for option in self.select_time.options:
+            option.default = False
+
+        # Clean up the Prix Type dropdown
+        for option in self.select_prixtype.options:
+            option.default = False
+        
         self.current_time = updated_time
         self.current_prix = None
         self.time_offset = None

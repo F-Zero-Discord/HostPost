@@ -1,14 +1,22 @@
 
 import os, traceback
 from datetime import timezone
+from dotenv import load_dotenv
 import discord
 from discord import app_commands
 from discord.ext import commands
 from fzd_db import get_db_connection, get_event_schedule
 from hostpost_views import WizardView
 from build_hostposts import build_posts
-from event_post_text import events, help_text, access_roles
+from event_post_text import events, help_text_1, help_text_2, access_roles
 from hostpost_exports import prepare_post_outputs
+
+load_dotenv()
+TEST_FLAG = os.getenv('TEST_FLAG')
+if TEST_FLAG == '1':
+    test_flag = True
+else:
+    test_flag = False
 
 
 ''' Event Builder Command Cog Class '''
@@ -77,6 +85,10 @@ class EventBuilder(commands.Cog):
                     view.all_results, 
                     view.autopost)
                 
+                if test_flag:
+                    test_announce = "## NOTE: HostPost is in test mode.\nPost times will be overridden to begin immediately and be approximately 30 seconds apart. Check /list_all_autoposts to find the trigger times.\nNo roles will be pinged."
+                    await interaction.followup.send(test_announce)
+                
                 event_prixinfo = view.all_results
 
         except Exception as e:
@@ -89,7 +101,8 @@ class EventBuilder(commands.Cog):
 
     @app_commands.command(name="help", description="Information about the HostPost bot.")
     async def help(self, interaction: discord.Interaction):
-        await interaction.response.send_message(help_text, ephemeral=False)
+        await interaction.response.send_message(help_text_1, ephemeral=False)
+        await interaction.followup.send(help_text_2, ephemeral=False)
     
     # Error handling for if user does not have appropriate role
     @event_setup.error

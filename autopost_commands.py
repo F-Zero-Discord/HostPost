@@ -24,7 +24,7 @@ class PostScheduler(commands.Cog):
         self.interaction: discord.Interaction | None = None
 
         load_dotenv()
-        self.validation_channel_id = discord.Object(id=os.getenv('VALIDATION_CHANNEL')).id
+        self.validation_channel_id = discord.Object(id=int(os.getenv('VALIDATION_CHANNEL'))).id
 
 
     ''' Autocomplete methods '''
@@ -71,12 +71,12 @@ class PostScheduler(commands.Cog):
     ''' ---------------------------------------------- '''
 
 
-    async def add_user_to_message(self, interaction: discord.Interaction, job_name: str, user: discord.Member | str):
-        # Manage possibility that user is not a member of server
-        if isinstance(user, discord.Member):
-            replacement_string = user.mention
-        else:
-            replacement_string = user
+    async def add_user_to_message(
+            self, 
+            interaction: discord.Interaction, 
+            job_name: str, 
+            user_string: str
+            ):
         
         # Find job_name in job stack
         if any(job.get("job_name") == job_name for job in self.bot.job_stack):
@@ -84,7 +84,7 @@ class PostScheduler(commands.Cog):
             # Replace string "@[Player]" with user mention
             substring = "@[Player]"
             if substring in message[0]:
-                new_message = message[0].replace(substring, replacement_string)
+                new_message = message[0].replace(substring, user_string)
                 for job in self.bot.job_stack:
                     if job["job_name"] == job_name:
                         job["message"] = new_message
@@ -95,6 +95,8 @@ class PostScheduler(commands.Cog):
     
 
     def events_job_list(self, scheduler: AsyncIOScheduler) -> list[dict]:
+        ''' Looks at all the jobs and returns the event names associated with the existing jobs.
+        '''
         job_list = scheduler.get_jobs()
         event_list: list[dict] = []
         for job in job_list:
@@ -141,6 +143,10 @@ class PostScheduler(commands.Cog):
 
 
     def post_message(self, job_name: str, channel_id: int) -> None:
+        ''' The method triggered when an event runs. Pulls the message from the 
+            job stack (self.bot.job.stack). This allows for the user to modify the
+            message after the job has been queued.
+        '''
         channel = self.bot.get_channel(channel_id)
 
         # Confirm that job "job_name" is in the job stack
@@ -155,7 +161,11 @@ class PostScheduler(commands.Cog):
         
 
     async def schedule_job(self, post_job: dict) -> None:
-        # post_job is a dict with keys "job_name" (str), "time" (datetime), "text" (str), and "channel" (discord.Object).
+        # post_job is a dict with keys 
+        # "job_name" (str), 
+        # "time" (datetime), 
+        # "text" (str), and 
+        # "channel" (discord.Object).
         # The act of scheduling is to add the job to the job stack ("self.bot.job_stack"). 
         # The job name and time will be added to the job and the message ("text") will be 
         # added to the job stack to allow for modification later.
@@ -183,6 +193,10 @@ class PostScheduler(commands.Cog):
                                    job_name: str, 
                                    channel_id: int
                                    ):
+        ''' Takes database scores and updates the event results post with the 
+            top three scores and the users associated with them. Also provides
+            direction to the user to either update the post (/edit_)
+        '''
         # Get scores from database
             # Get scheduled_event id from database
         async with get_db_connection() as db:
@@ -190,6 +204,7 @@ class PostScheduler(commands.Cog):
             # Get scores from database
         async with get_db_connection() as db:
             scores_dict = await get_event_scores(db, str(event_id))
+            print(f"Scores from database:\n{scores_dict}")
         # scores_dict has the keys "name", "user_id", "discord_name", and "score"
 
 
@@ -201,31 +216,33 @@ class PostScheduler(commands.Cog):
         results_message = message[0]
             # Make replacements
             # First Place
-        member = discord.utils.get(interaction.guild.members, name=scores_dict[0]["discord_name"])
-        if not member:
-            results_message = results_message.replace("@[first]", scores_dict[0]["name"])
-        else:
-            results_message = results_message.replace("@[first]", member.mention)
-        results_message = results_message.replace("@(first)", scores_dict[0]["name"])
-        results_message = results_message.replace("[firstpoints]", f"{int(scores_dict[0]["score"]):,}")
-        
-            # Second Place
-        member = discord.utils.get(interaction.guild.members, name=scores_dict[1]["discord_name"])
-        if not member:
-            results_message = results_message.replace("@[second]", scores_dict[1]["name"])
-        else:
-            results_message = results_message.replace("@[second]", member.mention)
-        results_message = results_message.replace("@(second)", scores_dict[1]["name"])
-        results_message = results_message.replace("[secondpoints]", f"{int(scores_dict[1]["score"]):,}")
-        
-            # Third Place
-        member = discord.utils.get(interaction.guild.members, name=scores_dict[2]["discord_name"])
-        if not member:
-            results_message = results_message.replace("@[third]", scores_dict[2]["name"])
-        else:
-            results_message = results_message.replace("@[third]", member.mention)
-        results_message = results_message.replace("@(third)", scores_dict[2]["name"])
-        results_message = results_message.replace("[thirdpoints]", f"{int(scores_dict[2]["score"]):,}")       
+        if scores_dict:
+            if len(scores_dict) >= 3:
+                member = discord.utils.get(interaction.guild.members, name=scores_dict[0]["discord_name"])
+                if not member:
+                    results_message = results_message.replace("@[first]", scores_dict[0]["name"])
+                else:
+                    results_message = results_message.replace("@[first]", member.mention)
+                results_message = results_message.replace("@(first)", scores_dict[0]["name"])
+                results_message = results_message.replace("[firstpoints]", f"{int(scores_dict[0]["score"]):,}")
+                
+                    # Second Place
+                member = discord.utils.get(interaction.guild.members, name=scores_dict[1]["discord_name"])
+                if not member:
+                    results_message = results_message.replace("@[second]", scores_dict[1]["name"])
+                else:
+                    results_message = results_message.replace("@[second]", member.mention)
+                results_message = results_message.replace("@(second)", scores_dict[1]["name"])
+                results_message = results_message.replace("[secondpoints]", f"{int(scores_dict[1]["score"]):,}")
+                
+                    # Third Place
+                member = discord.utils.get(interaction.guild.members, name=scores_dict[2]["discord_name"])
+                if not member:
+                    results_message = results_message.replace("@[third]", scores_dict[2]["name"])
+                else:
+                    results_message = results_message.replace("@[third]", member.mention)
+                results_message = results_message.replace("@(third)", scores_dict[2]["name"])
+                results_message = results_message.replace("[thirdpoints]", f"{int(scores_dict[2]["score"]):,}")
 
         for job in self.bot.job_stack:
             if job["job_name"] == job_name:
@@ -350,10 +367,42 @@ class PostScheduler(commands.Cog):
 
     @app_commands.command(name="post_prix_winner", description="Select user who won prix and post result.")
     @discord.app_commands.checks.has_any_role(*access_roles)
-    async def post_prix_winner(self, interaction: discord.Interaction, job_name: str, user: discord.Member):
-        await self.add_user_to_message(interaction, job_name, user)
-        self.scheduler.resume_job(job_name)
-        await interaction.response.send_message(f"We have a winner!")
+    async def post_prix_winner(
+        self, 
+        interaction: discord.Interaction, 
+        job_name: str, 
+        winner_1: discord.Member | None = None,
+        winner_2: discord.Member | None = None,
+        winner_string: str | None = None
+        ):
+        ''' Accept one or more winners (two can be mentions, the third would be a string) and add them to
+            the prix results post. All three winner parameters are optional, as the winner may be a 
+            discord.Member mention or a plain old string.
+        '''
+        # Given that all three user parameters are optional, check to ensure at least one has data.
+        if (not winner_1) and (not winner_2) and (not winner_string):
+            await interaction.response.send_message(
+                f"You must submit one of the optional winner parameters. No action taken", 
+                ephemeral=True
+                )
+            return
+        else:
+            winner_concat = str()
+            if winner_1:
+                winner_concat += f"{winner_1.mention}"
+                if winner_2:
+                    winner_concat += f" and {winner_2.mention}"
+                if winner_string:
+                    winner_concat += f" and {winner_string}"
+            elif winner_2:
+                winner_concat += f"{winner_2.mention}"
+                if winner_string:
+                    winner_concat += f" and {winner_string}"
+            else:
+                winner_concat += f"{winner_string}"
+            await self.add_user_to_message(interaction, job_name, winner_concat)
+            self.scheduler.resume_job(job_name)
+            await interaction.response.send_message(f"We have a winner!")
 
 
     @app_commands.command(name="edit_pending_autopost", description="Edit an event post.")

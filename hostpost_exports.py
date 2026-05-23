@@ -11,24 +11,8 @@ from event_post_text import automatable_posts
 ''' Output for Draft Posts '''
 async def post_draft_posts_to_discord(
     interaction: discord.Interaction, 
-    # hour_post: list[str], 
-    # go_posts: list[str], 
-    # results_posts: list[str], 
-    # event_results_post: list[str],
     post_struct: list[dict]
     ):
-    # # Send hour posts
-    # await interaction.followup.send(hour_post[0], ephemeral=False)
-    # if len(go_posts) == len(results_posts):
-    #     # interlace posts
-    #     for index, post in enumerate(go_posts):
-    #         await interaction.followup.send(post, ephemeral=False)
-    #         await interaction.followup.send(results_posts[index], ephemeral=False)
-    # else:
-    #     raise Exception(
-    #         f"Internal error: lists of prix initiation (length = {len(go_posts)}) and results posts (length = {len(results_posts)})are different lengths."
-    #         )
-    # await interaction.followup.send(event_results_post[0], ephemeral=False)
     for post in post_struct:
         await interaction.followup.send(post["post_text"], ephemeral=False)
 

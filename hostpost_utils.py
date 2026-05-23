@@ -9,7 +9,7 @@ def create_prix_option_set() -> discord.SelectOption:
     for prix in prix_info:
         dropdown_options.append(
             discord.SelectOption(
-                label=prix["emoji"] + " " + prix["mirror_emoji"] + prix["fullname"],
+                label=prix["fullname"],
                 description=prix["shortname"],
                 value=prix["shortname"]
                 )
