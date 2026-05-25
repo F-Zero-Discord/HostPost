@@ -103,13 +103,15 @@ class PostScheduler(commands.Cog):
             # Extract event name by removing the last part after the final underscore in the job name. 
             # This relies on the job naming convention used in build_autopost_dict.
             event_name: str = job.id.rsplit("_",1)[0]
-            if event_name not in [event["event name"] for event in event_list]:
-                event_list.append({"event name": event_name, "count": 1})
-            else:
-                # increment count for event in event_list
-                for event_dict in event_list:
-                    if event_name == event_dict["event name"]:
-                        event_dict["count"] += 1
+            # Don't include the job that calls the user to validate the results
+            if "getResults" not in event_name:
+                if event_name not in [event["event name"] for event in event_list]:
+                    event_list.append({"event name": event_name, "count": 1})
+                else:
+                    # increment count for event in event_list
+                    for event_dict in event_list:
+                        if event_name == event_dict["event name"]:
+                            event_dict["count"] += 1
         return event_list
     
 
@@ -204,9 +206,7 @@ class PostScheduler(commands.Cog):
             # Get scores from database
         async with get_db_connection() as db:
             scores_dict = await get_event_scores(db, str(event_id))
-            print(f"Scores from database:\n{scores_dict}")
         # scores_dict has the keys "name", "user_id", "discord_name", and "score"
-
 
         # Edit event_results post with final scores
             # Results placeholder strings are @[first], @[second], and @[third] for the 
@@ -273,6 +273,15 @@ class PostScheduler(commands.Cog):
         # Builds the autopost dict and then schedules the posts using the schedule_job method.
         autoposts = build_autopost_dict(event, post_struct, prix_info)
         scoreboard_close_time = autoposts[-1]['time']
+
+        # Check to ensure that the event is not already scheduled.
+        job_list = self.scheduler.get_jobs()
+        for job in job_list:
+            if event in job.id:
+                error_text = f"## :bangbang: Posts are already scheduled for event {event}. If you would like to replace those scheduled posts use `/cancel_event_posts` to cancel the existing scheduled event posts first."
+                await interaction.followup.send(error_text)
+                return
+
         for index, post in enumerate(autoposts):
             print(f"Scheduling post #{index+1} for {event} named {post['job_name']}")
             await self.schedule_job(post)
@@ -309,7 +318,7 @@ class PostScheduler(commands.Cog):
     #     await interaction.response.send_message("Task Scheduled. (maybe???)")
 
     #-------------------------------------------------
-    # Begin slah commands
+    # Begin slash commands
     #-------------------------------------------------
     @app_commands.command(name="list_all_autoposts", description="Provides list of scheduled tasks.")
     @discord.app_commands.checks.has_any_role(*access_roles)
