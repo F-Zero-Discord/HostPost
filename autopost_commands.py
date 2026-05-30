@@ -365,13 +365,10 @@ class PostScheduler(commands.Cog):
     async def cancel_event_posts(self, interaction: discord.Interaction, event_name: str):
         self.interaction = interaction
         job_list = self.scheduler.get_jobs()
-        for job in job_list:
-            if job.id.startswith(event_name):
-                self.scheduler.remove_job(job.id)
-                print(f"Cancelled job {job.id} for event {event_name}.")
         if not job_list:
             await interaction.response.send_message("No scheduled events exist. No action taken.")
         else:
+            self.remove_event_jobs(event_name)
             await interaction.response.send_message(f"All scheduled posts for event {event_name} cancelled.")
 
     @app_commands.command(name="post_prix_winner", description="Select user who won prix and post result.")
