@@ -251,7 +251,7 @@ class PostScheduler(commands.Cog):
         # Post the event_results post in #playground with request to validate
         
         channel = self.bot.get_channel(self.validation_channel_id)
-        await channel.send(clean_post(results_message))
+        await channel.send(clean_post(results_message), allowed_mentions=discord.AllowedMentions.none())
         host = None # Enter command to get host's discord.Member.mention here. Blank string until implemented.
         if not host == None:
             ping = host.mention
