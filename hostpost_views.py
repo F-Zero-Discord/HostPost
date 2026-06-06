@@ -129,6 +129,7 @@ class WizardView(discord.ui.View):
         self.current_prix: str | None = None
         self.time_offset: int | None = None
         self.prixtype: str | None = 'public'
+        self.lineup: list[str] = [] # currently unused.
 
         # 1. Clear the view of the 'automatic' items from decorators
         self.clear_items()

@@ -457,6 +457,7 @@ class PostScheduler(commands.Cog):
             self.scheduler.pause_job(job_name)
             self.scheduler.resume_job(job_name)
         # Remove job information from the stack
+        await asyncio.sleep(2) # sleep to ensure post made before job removed.
         self.bot.job_stack = [job for job in self.bot.job_stack if job.get("job_name") != job_name] 
         await interaction.response.send_message(f"{job_name} pushed.")
 
