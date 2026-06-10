@@ -1,6 +1,6 @@
 [project]
 name = "hostpost"
-version = "0.1.0"
+version = "0.3.0"
 description = "A Discord bot for preparing and posting event messages, integrated with a database"
 readme = "README.md"
 authors = [{ name = "lurch", email = "lurch.mclurchington@gmail.com" }]
@@ -32,3 +32,6 @@ dependencies = [
 [build-system]
 requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/main.py", "src/cogs", "src/utils", "src/fzd_db.py", "src/views", "src/data"]
