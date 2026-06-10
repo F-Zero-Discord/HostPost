@@ -15,8 +15,8 @@ from fzd_db import (get_db_connection,
                     update_host_in_db,
                     remove_host_from_event_db
         )
-from event_post_text import access_roles
-from hostpost_utils import discord_timestamp
+from hostpost.data.event_post_text import access_roles
+from hostpost.src.utils.hostpost_utils import discord_timestamp
 
 
 class HostingSchedule(commands.Cog):

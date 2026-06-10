@@ -6,7 +6,7 @@ import logging
 from dotenv import load_dotenv
 import os
 from fzd_db import init_db_pool
-from scheduler import init_scheduler
+from hostpost.src.utils.scheduler import init_scheduler
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -28,9 +28,9 @@ class HostBot(commands.Bot):
         try:
             self.db_pool = await init_db_pool()
             self.scheduler = await init_scheduler()
-            await self.load_extension("autopost_commands")
-            await self.load_extension("hostpost_commands")
-            await self.load_extension("hosting_signup")
+            await self.load_extension("hostpost.src.cogs.autopost_commands")
+            await self.load_extension("hostpost.src.cogs.hostpost_commands")
+            await self.load_extension("hostpost.src.cogs.hosting_signup")
             print("✅ Loaded extensions")
         except Exception as e:
             print(f"Failed to load extensions: {e}")

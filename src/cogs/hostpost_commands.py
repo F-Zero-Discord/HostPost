@@ -6,10 +6,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from fzd_db import get_db_connection, get_event_schedule
-from hostpost_views import WizardView
-from build_hostposts import build_posts
-from event_post_text import events, help_text_1, help_text_2, access_roles
-from hostpost_exports import prepare_post_outputs
+from hostpost.src.views.hostpost_views import WizardView
+from hostpost.src.utils.build_hostposts import build_posts
+from hostpost.data.event_post_text import events, help_text_1, help_text_2, access_roles
+from hostpost.src.utils.hostpost_exports import prepare_post_outputs
 
 load_dotenv()
 TEST_FLAG = os.getenv('TEST_FLAG')

@@ -11,10 +11,10 @@ from discord.ext import commands
 import asyncio
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from autoposts_utils import build_autopost_dict, clean_post
-from event_post_text import access_roles
-from hostpost_views import EditTemplateWizardView
-from fzd_db import get_db_connection, get_scheduled_event_id, get_event_scores
+from hostpost.src.utils.autoposts_utils import build_autopost_dict, clean_post
+from hostpost.data.event_post_text import access_roles
+from hostpost.src.views.hostpost_views import EditTemplateWizardView
+from hostpost.src.fzd_db import get_db_connection, get_scheduled_event_id, get_event_scores
 
 
 class PostScheduler(commands.Cog):

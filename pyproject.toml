@@ -1,33 +1,34 @@
-
-
 [project]
-name = "HostPost"
+name = "hostpost"
 version = "0.1.0"
 description = "A Discord bot for preparing and posting event messages, integrated with a database"
-readme = "readme.me"
-license = { file = "LICENSE" }
+readme = "README.md"
 authors = [{ name = "lurch", email = "lurch.mclurchington@gmail.com" }]
-requires-python = ">=3.10"
-
+requires-python = ">=3.12"
 dependencies = [
-    "aiohappteyeballs>=2.6.1",
-    "aiohttp>=2.6.1",
-    "aiomysql>=0.3.2",
-    "aiosignal>=1.4.0",
-    "apscheduler>=3.11.2",
-    "attrs>=26.1.0",
-    "discord.py>=2.7.1",
-    "dotenv>=0.9.9",
-    "frozenlist>=1.8.0",
-    "idna>=3.13",
-    "logging>=0.4.9.6",
-    "multidict>=6.7.1",
-    "pip>=26.1",
-    "pymysql>=1.1.3",
-    "typing-extensions>=4.15.0",
-    "tzlocal>=5.3.1",
-    "yarl>=1.23.0"
+    "aiohappyeyeballs==2.6.1",
+    "aiohttp==3.13.5",
+    "aiomysql==0.3.2",
+    "aiosignal==1.4.0",
+    "apscheduler==3.11.2",
+    "attrs==26.1.0",
+    "cffi==2.0.0",
+    "cryptography==48.0.0",
+    "discord-py==2.7.1",
+    "dotenv==0.9.9",
+    "frozenlist==1.8.0",
+    "idna==3.13",
+    "logging==0.4.9.6",
+    "multidict==6.7.1",
+    "propcache==0.4.1",
+    "pycparser==3.0",
+    "pymysql==1.1.3",
+    "python-dotenv==1.2.2",
+    "typing-extensions==4.15.0",
+    "tzlocal==5.3.1",
+    "yarl==1.23.0",
 ]
 
-[project.scripts]
-fzdbot = "main.py"
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"

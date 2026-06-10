@@ -6,7 +6,7 @@ import re
 import discord
 from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
-from build_hostposts import round_to_30_minutes
+from hostpost.src.utils.build_hostposts import round_to_30_minutes
 
 
 ''' Global Test Variables '''
