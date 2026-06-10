@@ -30,6 +30,7 @@ class HostBot(commands.Bot):
             self.scheduler = await init_scheduler()
             await self.load_extension("autopost_commands")
             await self.load_extension("hostpost_commands")
+            await self.load_extension("hosting_signup")
             print("✅ Loaded extensions")
         except Exception as e:
             print(f"Failed to load extensions: {e}")

@@ -116,6 +116,38 @@ async def execute_query(conn, query, params=None, fetch="all", isProc:bool = Fal
             logger.error(f"[DB QUERY ERROR]: {e}\nQuery: {query}\nParams: {params}")
             raise
 
+async def get_user_id(db, discord_id: str):
+    """ Given a discord user id (discord_id), returns the database
+        id of that user
+    """
+    sql_getuser = "SELECT id from users WHERE discord_user_id = %s"
+    user = await execute_query(db, sql_getuser, params=(discord_id,),  fetch="one")
+    if user:
+        return user['id']
+    else:
+        return None
+
+async def add_new_user(db, discord_username, display_name=None) -> None:
+    """ Adds new user to the database
+    """ 
+    
+    # Assuming "discord_display_name" isn't required 
+    sql_newuser="INSERT INTO users (tag, discord_user_id) VALUES (%s, %s);"
+
+    if display_name is None: # Defaults to user's server display name 
+        display_name = discord_username.nick[0:10]
+    await execute_query(db, sql_newuser, params=(display_name, discord_username.name), fetch=None)
+
+
+############################################
+# ^ Above are Nightmare-Bot functions
+############################################
+
+
+############################################
+# v Below are functions specific to HostPost
+############################################
+
 async def get_event_schedule(db):
     """ Executes sql process query to get scheduled events in future
     """         
@@ -149,3 +181,48 @@ async def get_event_scores(db, scheduled_event_id):
                         """
     params = (scheduled_event_id,)
     return await execute_query(db, sql_event_scores, params=params, isProc=False)
+
+
+async def get_hosting_schedule(db):
+    """ Gets current and future events and the associated hosts. Gets all future
+        evets_scheduled.
+        The output is a list of dicts with keys as follows:
+            event_name: str
+            start: datetime
+            host: str | None
+            active: integer (1 if active, 0 if not)
+    """
+    sql_host_schedule = """SELECT CAST(e.id AS CHAR) AS event_id, 
+                            events.name AS event_name, 
+                            e.utc_start_dt AS start,
+                            users.tag AS host,
+                            CAST(e.active AS SIGNED) AS active
+
+                            FROM events_scheduled e
+                            LEFT JOIN users ON e.host_id = users.id
+                            INNER JOIN events ON e.event_id = events.id
+                            WHERE e.utc_end_dt >= CURRENT_TIMESTAMP
+                            ORDER BY e.utc_start_dt
+                        """
+    params = ()
+    return await execute_query(db, sql_host_schedule, params=params, fetch="all", isProc=False)
+
+async def update_host_in_db(db, scheduled_event_id, host_user_id):
+    """ Updates the host column for the given scheduled event
+    """
+    sql_update_host = """UPDATE events_scheduled
+                        SET host_id = CAST(%s AS SIGNED)
+                        WHERE id = CAST(%s AS SIGNED)
+                    """
+    params = (host_user_id, scheduled_event_id)
+    await execute_query(db, sql_update_host, params=params, fetch=None)
+
+async def remove_host_from_event_db(db, scheduled_event_id):
+    """ Sets the host_id column in events_scheduled to NULL for a given scheduled event.
+    """
+    sql_remove_host = """UPDATE events_scheduled
+                        SET host_id = NULL
+                        WHERE id = CAST(%s AS SIGNED)
+                    """
+    params = (scheduled_event_id,)
+    await execute_query(db, sql_remove_host, params=params, fetch=None)
