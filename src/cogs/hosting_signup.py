@@ -8,15 +8,15 @@ from datetime import datetime, UTC
 import discord
 from discord import app_commands
 from discord.ext import commands
-from fzd_db import (get_db_connection, 
+from src.fzd_db import (get_db_connection, 
                     get_hosting_schedule, 
                     add_new_user, 
                     get_user_id, 
                     update_host_in_db,
                     remove_host_from_event_db
         )
-from hostpost.data.event_post_text import access_roles
-from hostpost.src.utils.hostpost_utils import discord_timestamp
+from src.data.event_post_text import access_roles
+from src.utils.hostpost_utils import discord_timestamp
 
 
 class HostingSchedule(commands.Cog):
@@ -68,7 +68,7 @@ class HostingSchedule(commands.Cog):
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def hosting_schedule(self, interaction: discord.Interaction):
         try:
-            async with get_db_connection() as db:
+            async with get_db_connection(self.bot.db_pool) as db:
                 event_dict = await get_hosting_schedule(db)
             # Create event list for autocomplete
             self.event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
@@ -96,7 +96,7 @@ class HostingSchedule(commands.Cog):
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def update_host_for_event(self, interaction: discord.Interaction, event: str, host: discord.Member):
         try:
-            async with get_db_connection() as db:
+            async with get_db_connection(self.bot.db_pool) as db:
                 event_dict = await get_hosting_schedule(db)
             # Create event list for autocomplete
             self.event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
@@ -116,7 +116,7 @@ class HostingSchedule(commands.Cog):
             
             # Updated host in database
             # Get user id first, or add user if not registered in database
-            async with get_db_connection() as db:
+            async with get_db_connection(self.bot.db_pool) as db:
                 db_user_id = await self.get_or_create_db_user(db, host)
                 await update_host_in_db(db, event_info['event_id'], db_user_id)
             await interaction.response.send_message(f"Host for {event} updated to {host.display_name}.", ephemeral=False)
@@ -130,7 +130,7 @@ class HostingSchedule(commands.Cog):
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def remove_host_from_event(self, interaction: discord.Interaction, event: str):
         try:
-            async with get_db_connection() as db:
+            async with get_db_connection(self.bot.db_pool) as db:
                 event_dict = await get_hosting_schedule(db)
             # Create event list for autocomplete
             self.event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
@@ -150,7 +150,7 @@ class HostingSchedule(commands.Cog):
             
             # Updated host in database to None
             print(f'Scheduled event id: {event_info['event_id']}')
-            async with get_db_connection() as db:
+            async with get_db_connection(self.bot.db_pool) as db:
                 await remove_host_from_event_db(db, event_info['event_id'])
             await interaction.response.send_message(f"{event} updated to have no host.", ephemeral=False)
 
@@ -182,7 +182,7 @@ async def setup(bot: commands.Bot):
     GUILD_ID=discord.Object(id=os.getenv('SERVER_ID'))
     # Initialize list of events. This is updated during slash command. Initialization and 
     # update are necessary to not have to continually pull from the database during autocomplete.
-    async with get_db_connection() as db:
+    async with get_db_connection(bot.db_pool) as db:
         event_dict = await get_hosting_schedule(db)
     event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
     await bot.add_cog(HostingSchedule(bot, event_list), guild=GUILD_ID)

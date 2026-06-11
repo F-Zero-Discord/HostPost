@@ -34,4 +34,4 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/main.py", "src/cogs", "src/utils", "src/fzd_db.py", "src/views", "src/data"]
+packages = ["src"]

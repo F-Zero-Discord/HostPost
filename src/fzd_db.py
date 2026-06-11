@@ -19,9 +19,11 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 stdout_handler.setFormatter(formatter)
 logger.addHandler(stdout_handler)
 
-_connection_pool = None
+
 async def init_db_pool():
-    global _connection_pool
+    # global _connection_pool
+    _connection_pool = None
+
     DB_CONFIG = {
         'user': os.getenv("DB_USER"),
         'password': os.getenv("DB_PASSWORD"),
@@ -40,30 +42,31 @@ async def init_db_pool():
     return _connection_pool
 
 
-async def get_connection_from_pool():
+async def get_connection_from_pool(connection_pool: aiomysql.Pool):
     """
     Context manager that safely checks out a connection from the pool,
     and returns it afterward (even if errors happen).
     Automatically rebuilds the pool if it breaks.
     """
-    global _connection_pool
+    # global _connection_pool
     conn = None
     try:
-        conn = await _connection_pool.acquire()
+        # conn = await _connection_pool.acquire()
+        conn = await connection_pool.acquire()
         logger.info(f"[DB] Got connection from pool: id={id(conn)}")
     except aiomysql.Error:
         logger.warning("[DB CONNECTION] POOL IS DEAD...")
     return conn
 
 @asynccontextmanager
-async def get_db_connection():
+async def get_db_connection(connection_pool: aiomysql.Pool):
     """
     Context manager for safely acquiring and releasing a DB connection.
     Rolls back on error and retries once if connection is lost.
     """
     conn = None
     try:
-        conn = await get_connection_from_pool()
+        conn = await get_connection_from_pool(connection_pool)
          # Test connection quickly (cheap ping)
         #conn.ping(reconnect=True, attempts=1, delay=0)
 
@@ -82,7 +85,8 @@ async def get_db_connection():
 
     finally:
         if conn:
-            _connection_pool.release(conn) #release_connection(conn)
+            # _connection_pool.release(conn) #release_connection(conn)
+            connection_pool.release(conn) #release_connection(conn)
 
 async def execute_query(conn, query, params=None, fetch="all", isProc:bool = False):
     """

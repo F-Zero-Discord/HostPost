@@ -2,10 +2,10 @@ import io
 import discord
 from discord.ext import commands
 from datetime import datetime
-from hostpost.src.views.hostpost_views import EditTemplateWizardView
-from hostpost.src.cogs.autopost_commands import PostScheduler
-from hostpost.src.utils.autoposts_utils import clean_post, insert_new_message_contents
-from hostpost.data.event_post_text import automatable_posts
+from src.views.hostpost_views import EditTemplateWizardView
+from src.cogs.autopost_commands import PostScheduler
+from src.utils.autoposts_utils import clean_post, insert_new_message_contents
+from data.event_post_text import automatable_posts
 
 
 ''' Output for Draft Posts '''

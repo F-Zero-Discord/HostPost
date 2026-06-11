@@ -7,9 +7,8 @@ Functions in this module take the following to build posts for regular weekly ev
 '''
 import random
 from datetime import datetime, timedelta
-from hostpost.src.utils.hostpost_utils import discord_timestamp, round_to_30_minutes
-from hostpost.data.event_post_text import prix_info, schedule_line, events, custom_text, clean_driving_list
-# from pengbot_addons import event_post_text
+from src.utils.hostpost_utils import discord_timestamp, round_to_30_minutes
+from data.event_post_text import prix_info, schedule_line, events, custom_text, clean_driving_list
 
 def build_posts(event_name: str, prix_list: list[dict[str, any]]):
     # Format of event_dict:

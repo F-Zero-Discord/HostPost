@@ -5,8 +5,8 @@ from discord.ext import commands
 import logging
 from dotenv import load_dotenv
 import os
-from fzd_db import init_db_pool
-from hostpost.src.utils.scheduler import init_scheduler
+from src.fzd_db import init_db_pool
+from src.utils.scheduler import init_scheduler
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -24,13 +24,13 @@ class HostBot(commands.Bot):
 
     async def setup_hook(self):
         """Called automatically at startup, safe for async setup."""
-        # Load all cogs from /command_cogs folder
+        # Load all cogs from /cogs folder
         try:
             self.db_pool = await init_db_pool()
             self.scheduler = await init_scheduler()
-            await self.load_extension("hostpost.src.cogs.autopost_commands")
-            await self.load_extension("hostpost.src.cogs.hostpost_commands")
-            await self.load_extension("hostpost.src.cogs.hosting_signup")
+            await self.load_extension("src.cogs.autopost_commands")
+            await self.load_extension("src.cogs.hostpost_commands")
+            await self.load_extension("src.cogs.hosting_signup")
             print("✅ Loaded extensions")
         except Exception as e:
             print(f"Failed to load extensions: {e}")

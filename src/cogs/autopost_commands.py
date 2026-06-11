@@ -11,10 +11,10 @@ from discord.ext import commands
 import asyncio
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from hostpost.src.utils.autoposts_utils import build_autopost_dict, clean_post
-from hostpost.data.event_post_text import access_roles
-from hostpost.src.views.hostpost_views import EditTemplateWizardView
-from hostpost.src.fzd_db import get_db_connection, get_scheduled_event_id, get_event_scores
+from src.utils.autoposts_utils import build_autopost_dict, clean_post
+from data.event_post_text import access_roles
+from src.views.hostpost_views import EditTemplateWizardView
+from src.fzd_db import get_db_connection, get_scheduled_event_id, get_event_scores
 
 
 class PostScheduler(commands.Cog):
@@ -201,10 +201,10 @@ class PostScheduler(commands.Cog):
         '''
         # Get scores from database
             # Get scheduled_event id from database
-        async with get_db_connection() as db:
+        async with get_db_connection(self.bot.db_pool) as db:
             event_id = await get_scheduled_event_id(db, event_name) # returns a dict
             # Get scores from database
-        async with get_db_connection() as db:
+        async with get_db_connection(self.bot.db_pool) as db:
             scores_dict = await get_event_scores(db, str(event_id))
         # scores_dict has the keys "name", "user_id", "discord_name", and "score"
 

@@ -6,7 +6,7 @@ import re
 import discord
 from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
-from hostpost.src.utils.build_hostposts import round_to_30_minutes
+from src.utils.build_hostposts import round_to_30_minutes
 
 
 ''' Global Test Variables '''
@@ -47,7 +47,7 @@ def build_autopost_dict(event: str, post_struct: list[dict], prix_info: list[dic
 
     # Get discord channels where posts will go. Note: test and production channels are toggled directly in the .env file.
     load_dotenv()
-    hour_post_channel = discord.Object(id=int(os.getenv('ANNOUNCE_CHANNEL')))
+    hour_post_channel = discord.Object(id=int(os.getenv('EVENT_ANNOUNCE_CHANNEL')))
     other_post_channel = discord.Object(id=int(os.getenv('ENGAGE_CHANNEL')))
 
     autoposts: list[dict] = []

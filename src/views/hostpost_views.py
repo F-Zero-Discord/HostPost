@@ -9,7 +9,7 @@ by lurch, and the internet.
 
 from datetime import datetime, timedelta
 import discord
-from hostpost.src.utils.hostpost_utils import (create_prix_option_set,
+from src.utils.hostpost_utils import (create_prix_option_set,
                             create_timeoffset_option_set, 
                             create_publicprivate_option_set, 
                             discord_timestamp)
