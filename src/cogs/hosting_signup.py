@@ -9,12 +9,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from src.fzd_db import (get_db_connection, 
-                    get_hosting_schedule, 
-                    add_new_user, 
-                    get_user_id, 
-                    update_host_in_db,
-                    remove_host_from_event_db
-        )
+                        check_db_for_hosting_support,
+                        get_hosting_schedule, 
+                        add_new_user, 
+                        get_user_id, 
+                        update_host_in_db,
+                        remove_host_from_event_db
+                    )
 from src.data.event_post_text import access_roles
 from src.utils.hostpost_utils import discord_timestamp
 
@@ -184,5 +185,5 @@ async def setup(bot: commands.Bot):
     # update are necessary to not have to continually pull from the database during autocomplete.
     async with get_db_connection(bot.db_pool) as db:
         event_dict = await get_hosting_schedule(db)
-    event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
-    await bot.add_cog(HostingSchedule(bot, event_list), guild=GUILD_ID)
+        event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
+        await bot.add_cog(HostingSchedule(bot, event_list), guild=GUILD_ID)

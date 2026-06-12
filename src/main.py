@@ -5,12 +5,13 @@ from discord.ext import commands
 import logging
 from dotenv import load_dotenv
 import os
-from src.fzd_db import init_db_pool
+from src.fzd_db import init_db_pool, get_db_connection, check_db_for_hosting_support
 from src.utils.scheduler import init_scheduler
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 GUILD_ID = discord.Object(id=os.getenv('SERVER_ID'))
+DATABASE = os.getenv('DB_NAME')
 
 handler = logging.FileHandler(filename='hostbot.log', encoding='utf-8', mode='w')
 intents = discord.Intents.default()
@@ -30,7 +31,10 @@ class HostBot(commands.Bot):
             self.scheduler = await init_scheduler()
             await self.load_extension("src.cogs.autopost_commands")
             await self.load_extension("src.cogs.hostpost_commands")
-            await self.load_extension("src.cogs.hosting_signup")
+            # Check to see if database configured to allow for hosting support. Only load cog if True.
+            async with get_db_connection(self.db_pool) as db:
+                if await check_db_for_hosting_support(db, DATABASE):
+                    await self.load_extension("src.cogs.hosting_signup")
             print("✅ Loaded extensions")
         except Exception as e:
             print(f"Failed to load extensions: {e}")

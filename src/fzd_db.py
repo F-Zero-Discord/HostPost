@@ -230,3 +230,18 @@ async def remove_host_from_event_db(db, scheduled_event_id):
                     """
     params = (scheduled_event_id,)
     await execute_query(db, sql_remove_host, params=params, fetch=None)
+
+async def check_db_for_hosting_support(db, DATABASE):
+    """ Checks database columns of 'events_scheduled' to see if 'host_id' column exists. 
+    Returns True if exists, False if not.
+    """
+    sql_check_host_column = """
+                            SELECT COUNT(*) AS count
+                            FROM information_schema.columns
+                            WHERE table_schema = %s
+                            AND table_name = 'events_scheduled' 
+                            AND column_name = 'host_id'
+                            """
+    params = (DATABASE,)
+    result = await execute_query(db, sql_check_host_column, params=params, fetch='one', isProc=False)
+    return result['count'] > 0
