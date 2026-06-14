@@ -245,3 +245,21 @@ async def check_db_for_hosting_support(db, DATABASE):
     params = (DATABASE,)
     result = await execute_query(db, sql_check_host_column, params=params, fetch='one', isProc=False)
     return result['count'] > 0
+
+async def get_tracks_from_db(db):
+    """ Gets track names from database and returns two lists: 
+    one for 99 mode tracks and one for classic tracks.
+    """
+    sql_get_classic_tracks = '''
+                                SELECT name
+                                FROM tracks
+                                WHERE type = 'classic'
+                            '''
+    sql_get_99_tracks = '''
+                        SELECT name
+                        FROM tracks
+                        WHERE type <> 'classic'
+                        '''
+    classic_tracks = await execute_query(db, sql_get_classic_tracks, params=None, fetch='all', isProc=False)
+    ninetynine_tracks = await execute_query(db, sql_get_99_tracks, params=None, fetch='all', isProc=False)
+    return [track['name'] for track in classic_tracks], [track['name'] for track in ninetynine_tracks]

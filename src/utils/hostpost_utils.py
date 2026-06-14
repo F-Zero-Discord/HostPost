@@ -16,6 +16,7 @@ def create_prix_option_set() -> discord.SelectOption:
             )
     return dropdown_options
 
+
 def create_timeoffset_option_set() -> discord.SelectOption:
     dropdown_options = []
     for key, value in time_offset_options.items():
@@ -27,6 +28,7 @@ def create_timeoffset_option_set() -> discord.SelectOption:
                 )
             )
     return dropdown_options
+
 
 def create_publicprivate_option_set() -> discord.SelectOption:
     dropdown_options = []
@@ -42,6 +44,19 @@ def create_publicprivate_option_set() -> discord.SelectOption:
             ))
     return dropdown_options
 
+
+def create_track_option_set(tracks: list[str]) -> discord.SelectOption:
+    dropdown_options = []
+    for track in tracks:
+        dropdown_options.append(
+            discord.SelectOption(
+                label=track,
+                value=track
+            )
+        )
+    return dropdown_options
+
+
 def discord_timestamp(dt: datetime, format_type: str = "short") -> str:
     """Convert a datetime object to a Discord-formatted timestamp string."""
     match format_type:
@@ -53,6 +68,7 @@ def discord_timestamp(dt: datetime, format_type: str = "short") -> str:
             format_type = "f"
     unix_timestamp = round(int(dt.timestamp()))
     return f"<t:{unix_timestamp}:{format_type}>"
+
 
 def round_to_30_minutes(dt: datetime) -> datetime:
     """Round a datetime object to the nearest 30 minutes."""

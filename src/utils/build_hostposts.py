@@ -98,22 +98,26 @@ def build_schedule(prix_list: list[dict[str, any]]) -> str:
     schedule_text = ""
     for prix in prix_list:
         prix_dict = next((item for item in prix_info if item["shortname"] == prix["prix"]), None)
-        match prix["prix_type"]:
-            case "public":
-                # Note we'll need to make a less clean option if any prix requires tickets in increments other than 0, 1, or 3. But for now this should work fine.
-                match prix_dict["tickets"]:
-                    case 3:
-                        schedule_text += schedule_line["public_multi_tickets"].format(
-                             discord_timestamp(prix["time"], "short"), prix_dict["emoji"], prix_dict["mirror_emoji"], prix_dict["fullname"])
-                    case 1:
-                        schedule_text += schedule_line["public_one_ticket"].format(
-                             discord_timestamp(prix["time"], "short"), prix_dict["emoji"], prix_dict["mirror_emoji"], prix_dict["fullname"])
-                    case 0:
-                        schedule_text += schedule_line["public_no_tickets"].format(
-                             discord_timestamp(prix["time"], "short"), prix_dict["emoji"], prix_dict["mirror_emoji"], prix_dict["fullname"])
-            case "private":
-                schedule_text += schedule_line["private"].format(
-                     discord_timestamp(prix["time"], "short"), prix_dict["emoji"], prix_dict["mirror_emoji"], prix_dict["fullname"])
+        if prix["prix"] == "classicprix" and prix["lineup"]:
+            schedule_text += schedule_line["private_mp_lineup"].format(
+                    discord_timestamp(prix["time"], "short"), prix["lineup"][0], prix["lineup"][1], prix["lineup"][2])
+        else:
+            match prix["prix_type"]:
+                case "public":
+                    # Note we'll need to make a less clean option if any prix requires tickets in increments other than 0, 1, or 3. But for now this should work fine.
+                    match prix_dict["tickets"]:
+                        case 3:
+                            schedule_text += schedule_line["public_multi_tickets"].format(
+                                discord_timestamp(prix["time"], "short"), prix_dict["emoji"], prix_dict["mirror_emoji"], prix_dict["fullname"])
+                        case 1:
+                            schedule_text += schedule_line["public_one_ticket"].format(
+                                discord_timestamp(prix["time"], "short"), prix_dict["emoji"], prix_dict["mirror_emoji"], prix_dict["fullname"])
+                        case 0:
+                            schedule_text += schedule_line["public_no_tickets"].format(
+                                discord_timestamp(prix["time"], "short"), prix_dict["emoji"], prix_dict["mirror_emoji"], prix_dict["fullname"])
+                case "private":
+                    schedule_text += schedule_line["private"].format(
+                        discord_timestamp(prix["time"], "short"), prix_dict["emoji"], prix_dict["mirror_emoji"], prix_dict["fullname"])
     return schedule_text
 
 
@@ -139,14 +143,17 @@ def build_gp_posts(event_name: str, prix_list: list[dict[str, any]]) -> list[str
             role_ping = "<@&1197169889417371689>" # "@Events" role 
 
         # Build prix start post
-        match prix["prix_type"]:
-            case "public":
-                # Build the post using the prix_dict info and the event_name. This is where we would also include any special instructions for certain prix types (e.g. "Be sure to join immediately when the lobby opens for Cracked Cup!")
-                go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} {ticket_text} Public {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts SOON, {discord_timestamp(prix['time'], 'relative')}! <:READY:1226990432454578277> <:GO:1226991337723662497>\n## Join as soon as the prix opens!```")
-            case "private":
-                # Build the post using the prix_dict info and the event_name. This is where we would also include any special instructions for certain prix types.
-                go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} <:Private:1227046530721251479> Private {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts NOW! <:GO:1226991337723662497>\n## <:Private:1227046530721251479> Passcode: {str(random.randint(0,9999)).zfill(4)} <:Private:1227046530721251479>```")
-        # Build score-recording string differently for last prix in event
+        if prix["prix"] == 'classicprix' and prix["lineup"]:
+            go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} <:Private:1227046530721251479> Private {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts NOW! <:GO:1226991337723662497>\n## {prix['lineup'][0]} > {prix['lineup'][1]} > {prix['lineup'][2]}\n## <:Private:1227046530721251479> Passcode: {str(random.randint(0,9999)).zfill(4)} <:Private:1227046530721251479>```")
+        else:
+            match prix["prix_type"]:
+                case "public":
+                    # Build the post using the prix_dict info and the event_name. This is where we would also include any special instructions for certain prix types (e.g. "Be sure to join immediately when the lobby opens for Cracked Cup!")
+                    go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} {ticket_text} Public {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts SOON, {discord_timestamp(prix['time'], 'relative')}! <:READY:1226990432454578277> <:GO:1226991337723662497>\n## Join as soon as the prix opens!```")
+                case "private":
+                    # Build the post using the prix_dict info and the event_name. This is where we would also include any special instructions for certain prix types.
+                    go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} <:Private:1227046530721251479> Private {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts NOW! <:GO:1226991337723662497>\n## <:Private:1227046530721251479> Passcode: {str(random.randint(0,9999)).zfill(4)} <:Private:1227046530721251479>```")
+            # Build score-recording string differently for last prix in event
         if prix_list.index(prix) + 1 == len(prix_list):
             # round to nearest 30 minutes and subtract 1 minute to get scoreboard close time
             scoreboard_close_time = round_to_30_minutes(prix["time"] + timedelta(minutes=60)) - timedelta(minutes=1)

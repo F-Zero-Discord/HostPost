@@ -8,10 +8,12 @@ by lurch, and the internet.
 '''
 
 from datetime import datetime, timedelta
+import asyncio
 import discord
 from src.utils.hostpost_utils import (create_prix_option_set,
                             create_timeoffset_option_set, 
-                            create_publicprivate_option_set, 
+                            create_publicprivate_option_set,
+                            create_track_option_set,
                             discord_timestamp)
 
 ###################################################################
@@ -116,12 +118,33 @@ class TimeModal(discord.ui.Modal, title="Time Offset from Last Prix"):
 
 
 class WizardView(discord.ui.View):
-    def __init__(self, num_prix: int, default_start_time: datetime, event: str, use_simple_time: bool):
+    def __init__(self, 
+                 num_prix: int, 
+                 default_start_time: datetime, 
+                 event: str, 
+                 use_simple_time: bool,
+                 classic_tracks: list[str],
+                 ninetynine_tracks: list[str]
+                 ):
         super().__init__(timeout=180)
         self.num_prix: int = num_prix
         self.default_start_time = default_start_time
         self.current_time: datetime = default_start_time
         self.event: str = event
+        self.use_simple_time = use_simple_time
+        # Note that each dropdown needs a separate option set, as otherwise they'd share the same defaults
+        self.classic_track_options1: discord.SelectOption = create_track_option_set(classic_tracks)
+        self.classic_track_options2: discord.SelectOption = create_track_option_set(classic_tracks)
+        self.classic_track_options3: discord.SelectOption = create_track_option_set(classic_tracks)
+        self.ninetynine_track_options1: discord.SelectOption = create_track_option_set(ninetynine_tracks)
+        self.ninetynine_track_options2: discord.SelectOption = create_track_option_set(ninetynine_tracks)
+        self.ninetynine_track_options3: discord.SelectOption = create_track_option_set(ninetynine_tracks)
+        self.track_select_1: discord.ui.Select | None = None,
+        self.track_select_2: discord.ui.Select | None = None,
+        self.track_select_3: discord.ui.Select | None = None,
+        self.track_1: str | None = None
+        self.track_2: str | None = None
+        self.track_3: str | None = None
         self.current_step: int = 1
         self.all_results: list[dict[str, any]] = []
         self.autopost: bool = False
@@ -129,7 +152,13 @@ class WizardView(discord.ui.View):
         self.current_prix: str | None = None
         self.time_offset: int | None = None
         self.prixtype: str | None = 'public'
-        self.lineup: list[str] = [] # currently unused.
+        self.track_list: str | None = None
+        self.selected_tracks: list[str] = []
+        self.lineup_type: str | None = None
+        # This is a hack to allow us to use the same view for both prix selection and 
+        # track selection steps, which have different dropdown options. We check this variable 
+        # in the dropdown callbacks to know which options to populate and how to save the results.
+        self.track_selection_menu: bool = False 
 
         # 1. Clear the view of the 'automatic' items from decorators
         self.clear_items()
@@ -138,7 +167,7 @@ class WizardView(discord.ui.View):
         self.add_item(self.select_choice)
 
         # 3. Depending on the choice of Simple or Custom time, add the one we want.
-        if use_simple_time:
+        if self.use_simple_time:
             self.add_item(self.select_time)
         else:
             self.add_item(self.set_time_button)
@@ -159,14 +188,32 @@ class WizardView(discord.ui.View):
     # ''' ---------------------------------------------- '''
 
     def get_content(self):
-        if self.current_step > self.num_prix:
-            # summary = "\n".join(f"**{key}** @ **{value}**" for key, value in self.all_results.items())
-            return f"✅ **All Selections Completed!**\n\n"
-        
-        return (f"## {self.event} is scheduled to start {discord_timestamp(self.default_start_time, 'relative')} at {discord_timestamp(self.default_start_time, 'short')}.\n"
-                f"### Step {self.current_step} of {self.num_prix}\n"
-                f"**Current Selection:** The {self.prixtype or 'None'} {self.current_prix or 'None'} with {self.time_offset or 'None'} minute offset\n"
-                "Please select an option and a time:")
+        if not self.track_selection_menu:
+            if self.current_step > self.num_prix:
+                return f"✅ **All Selections Completed!**\n\n"
+            
+            return (f"## {self.event} is scheduled to start {discord_timestamp(self.default_start_time, 'relative')} at {discord_timestamp(self.default_start_time, 'short')}.\n"
+                    f"### Step {self.current_step} of {self.num_prix}\n"
+                    f"**Current Selection:** The {self.prixtype or 'None'} {self.current_prix or 'None'} with {self.time_offset or 'None'} minute offset\n"
+                    "Please select an option and a time:")
+        else:
+            if self.track_select_1.values:
+                track_1 = self.track_select_1.values[0]
+            else:
+                track_1 = None
+            if self.track_select_2.values:
+                track_2 = self.track_select_2.values[0]
+            else:
+                track_2 = None
+            if self.track_select_3.values:
+                track_3 = self.track_select_3.values[0]
+            else:
+                track_3 = None
+            return (f"## {self.event} is scheduled to start {discord_timestamp(self.default_start_time, 'relative')} at {discord_timestamp(self.default_start_time, 'short')}.\n"
+                    f"### Track lineup:\n"
+                    f"**Current Selection:** {track_1 or 'None'} -> {track_2 or 'None'} -> {track_3 or 'None'}\n"
+                    "Please select all three tracks:")
+
 
     async def auto_or_manual_post(self, interaction: discord.Interaction):
         self.clear_items()
@@ -197,6 +244,30 @@ class WizardView(discord.ui.View):
             view=self
         )
 
+
+    def show_wizard_ui(self):
+        self.clear_items()
+        
+        if self.track_selection_menu:
+            # Show ONLY the sub-options and the next button
+            self.add_item(self.track_select_1)
+            self.add_item(self.track_select_2)
+            self.add_item(self.track_select_3)
+            self.add_item(self.next_button)
+        else:
+            # Show standard main menu layout
+            self.add_item(self.select_choice)
+            if self.use_simple_time:
+                self.add_item(self.select_time)
+            else:
+                self.add_item(self.set_time_button)
+            self.add_item(self.select_prixtype)
+            self.add_item(self.next_button)
+
+    
+    ###################################
+    # Below are prix, time, and public/private selection handlers
+    ###################################
     @discord.ui.select(
         placeholder="1. Select the Prix...",
         options=create_prix_option_set()
@@ -204,7 +275,7 @@ class WizardView(discord.ui.View):
     async def select_choice(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.current_prix = select.values[0]
 
-        # 2. Update the visual state so the selection sticks!
+        # Update the visual state so the selection sticks!
         for option in select.options:
             option.default = (option.value == self.current_prix)
 
@@ -244,35 +315,149 @@ class WizardView(discord.ui.View):
         # Immediately update the message
         await interaction.response.edit_message(content=self.get_content(), view=self)
 
+
+    ###################################
+    # Below are track selection handlers
+    ###################################
+    class TrackSelect1(discord.ui.Select):
+        def __init__(self, parent_view: discord.ui.View, track_options: discord.SelectOption, track_num: int):
+            self.parent_view = parent_view
+            super().__init__(
+                placeholder=f"Track {track_num}...",
+                options=track_options
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            for option in self.options:
+                option.default = (option.value == self.values[0])
+            await interaction.response.edit_message(content=self.parent_view.get_content(), view=self.parent_view)
+    
+    class TrackSelect2(discord.ui.Select):
+        def __init__(self, parent_view: discord.ui.View, track_options: discord.SelectOption, track_num: int):
+            self.parent_view = parent_view
+            super().__init__(
+                placeholder=f"Track {track_num}...",
+                options=track_options
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            for option in self.options:
+                option.default = (option.value == self.values[0])
+            await interaction.response.edit_message(content=self.parent_view.get_content(), view=self.parent_view)
+        
+    class TrackSelect3(discord.ui.Select):
+        def __init__(self, parent_view: discord.ui.View, track_options: discord.SelectOption, track_num: int):
+            self.parent_view = parent_view
+            super().__init__(
+                placeholder=f"Track {track_num}...",
+                options=track_options
+            )
+
+        async def callback(self, interaction: discord.Interaction):
+            for option in self.options:
+                option.default = (option.value == self.values[0])
+            await interaction.response.edit_message(content=self.parent_view.get_content(), view=self.parent_view)
+
+
+    
     @discord.ui.button(label="Next Step", style=discord.ButtonStyle.primary, row=4)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.current_prix or not self.time_offset or not self.prixtype:
-            await interaction.response.send_message("Please fill all three Prix elements before proceeding!", ephemeral=True)
-            return
+        # Set the completion requirement based on the menu
+        if self.track_selection_menu:
+            if not self.track_select_1.values or not self.track_select_2.values or not self.track_select_3.values[0]:
+                await interaction.response.send_message(
+                    "Please fill all three tracks before proceeding!", 
+                    ephemeral=True
+                    )
+                return
+        else:
+            if not self.current_prix or not self.time_offset or not self.prixtype:
+                await interaction.response.send_message(
+                    "Please fill all three Prix elements before proceeding!", 
+                    ephemeral=True
+                    )
+                return
 
-        # Save and increment
-        updated_time = self.current_time + timedelta(minutes=int(self.time_offset))
-        # Setting prix_type to "public" in anticipation of future private prix functionality.
-        self.all_results.append({"prix": self.current_prix, "time": updated_time, "prix_type": self.prixtype})
-        self.current_step += 1
-        
-        # Reset for the next round of choices
-        # Clean up the Choice dropdown
-        for option in self.select_choice.options:
-            option.default = False
+        # Handle if we are in the track selection step first
+        if self.track_selection_menu:          
+            self.selected_tracks.append(self.track_select_1.values[0])
+            self.selected_tracks.append(self.track_select_2.values[0])
+            self.selected_tracks.append(self.track_select_3.values[0])
+
+            # Save prix information now.
+            # Update time
+            updated_time = self.current_time + timedelta(minutes=int(self.time_offset))
+            self.all_results.append({"prix": self.current_prix, 
+                                     "time": updated_time, 
+                                     "prix_type": self.prixtype, 
+                                     "lineup": self.selected_tracks
+                                     })
             
-        # Clean up the Time dropdown (if it exists/is being used)
-        for option in self.select_time.options:
-            option.default = False
+            # Reset to menu default options
+            for option in self.track_select_1.options:
+                option.default = False
+            for option in self.track_select_2.options:
+                option.default = False
+            for option in self.track_select_3.options:
+                option.default = False
+            self.current_time = updated_time
+            self.current_prix = None
+            self.time_offset = None
+            self.prixtype = 'public'
+            self.selected_tracks = []
+            self.track_selection_menu = False
+            
+            self.current_step += 1
+        else:
+            # Reset for the next round of choices
+            # Clean up the Choice dropdown
+            for option in self.select_choice.options:
+                option.default = False
+                
+            # Clean up the Time dropdown (if it exists/is being used)
+            for option in self.select_time.options:
+                option.default = False
 
-        # Clean up the Prix Type dropdown
-        for option in self.select_prixtype.options:
-            option.default = False
-        
-        self.current_time = updated_time
-        self.current_prix = None
-        self.time_offset = None
-        self.prixtype = 'public'
+            # Clean up the Prix Type dropdown
+            for option in self.select_prixtype.options:
+                option.default = False
+
+            # Check to see if mini prix or classic mini prix selected. If so, user will get option to select tracks.
+            # Note: the dropdown implementation only works when there are 25 tracks or fewer.
+            match self.current_prix:
+                case "classicprix":
+                    # 
+                    self.track_select_1 = self.TrackSelect1(self, self.classic_track_options1, 1)
+                    self.track_select_2 = self.TrackSelect2(self, self.classic_track_options2, 2)
+                    self.track_select_3 = self.TrackSelect3(self, self.classic_track_options3, 3)
+                    self.track_selection_menu = True
+                # Note: selecting mini-prix tracks currently unavailable as there are 42 tracks
+                # case "miniprix":
+                #     self.track_select_1 = self.TrackSelect1(self, self.ninetynine_track_options1, 1)
+                #     self.track_select_2 = self.TrackSelect2(self, self.ninetynine_track_options2, 2)
+                #     self.track_select_3 = self.TrackSelect3(self, self.ninetynine_track_options3, 3)
+                    self.track_selection_menu = True
+                case _:
+                    self.track_select_1 = None
+                    self.track_select_2 = None
+                    self.track_select_3 = None
+                    self.track_selection_menu = False
+
+                    # As no classicprix or miniprix schedule is required, save prix information now.
+                    # Update time
+                    updated_time = self.current_time + timedelta(minutes=int(self.time_offset))
+                    self.all_results.append({"prix": self.current_prix, 
+                                            "time": updated_time, 
+                                            "prix_type": self.prixtype, 
+                                            "lineup": self.selected_tracks
+                                            })
+                    # Reset to menu default options
+                    self.current_time = updated_time
+                    self.current_prix = None
+                    self.time_offset = None
+                    self.prixtype = 'public'
+
+                    self.current_step += 1
 
         if self.current_step > self.num_prix:
             # # Final step
@@ -281,4 +466,7 @@ class WizardView(discord.ui.View):
             # Update button label for the last item
             if self.current_step == self.num_prix:
                 button.label = "Finish"
-            await interaction.response.edit_message(content=self.get_content(), view=self)
+            self.show_wizard_ui()
+            # await interaction.response.edit_message(content=self.get_content(), view=self)
+            # await interaction.message.edit(content=self.get_content(), view=self)
+            await interaction.response.send_message(content=self.get_content(), view=self)

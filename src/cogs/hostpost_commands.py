@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import discord
 from discord import app_commands
 from discord.ext import commands
-from src.fzd_db import get_db_connection, get_event_schedule
+from src.fzd_db import get_db_connection, get_event_schedule, get_tracks_from_db
 from src.views.hostpost_views import WizardView
 from src.utils.build_hostposts import build_posts
 from data.event_post_text import events, help_text_1, help_text_2, access_roles
@@ -21,9 +21,14 @@ else:
 
 ''' Event Builder Command Cog Class '''
 class EventBuilder(commands.Cog):
-    def __init__(self, bot: commands.Bot, event_list) -> None:
+    def __init__(self, bot: commands.Bot, 
+                 event_list: list[str], 
+                 classic_tracks: list[str], 
+                 ninetynine_tracks: list[str]) -> None:
         self.bot: commands.Bot = bot
         self.event_list: list[str] | None = event_list
+        self.classic_tracks: list[str] = classic_tracks
+        self.ninetynine_tracks: list[str] = ninetynine_tracks
 
     ''' Autocomplete methods '''
     async def event_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -64,7 +69,12 @@ class EventBuilder(commands.Cog):
                 default_start_time = default_start_time.replace(tzinfo=timezone.utc)
                 use_simple_time = (timetype == "Simple")
 
-                view = WizardView(num_prix, default_start_time, event, use_simple_time)
+                view = WizardView(num_prix, 
+                                  default_start_time, 
+                                  event, 
+                                  use_simple_time, 
+                                  self.classic_tracks, 
+                                  self.ninetynine_tracks)
                 await interaction.response.send_message(view.get_content(), view=view)
 
                 timed_out = await view.wait()
@@ -126,5 +136,6 @@ async def setup(bot: commands.Bot):
     # update are necessary to not have to continually pull from the database during autocomplete.
     async with get_db_connection(bot.db_pool) as db:
         available_event_dict = await get_event_schedule(db)
+        classic_tracks, ninetynine_tracks = await get_tracks_from_db(db)
     event_list = [s['event'] for s in available_event_dict if 'event' in s]
-    await bot.add_cog(EventBuilder(bot, event_list), guild=GUILD_ID)
+    await bot.add_cog(EventBuilder(bot, event_list, classic_tracks, ninetynine_tracks), guild=GUILD_ID)

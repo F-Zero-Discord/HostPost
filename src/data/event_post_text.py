@@ -34,6 +34,7 @@ schedule_line = {
     "public_one_ticket": "<:EventTimer:1213542180195536897> {0} <:Ticket:1194747589610967131> Public {1} {2} {3}\n",
     "public_no_tickets": "<:EventTimer:1213542180195536897> {0} Public {1} {2} {3}\n",
     "private": "<:EventTimer:1213542180195536897> {0} <:Private:1227046530721251479> Private {1} {2} {3}\n",
+    "private_mp_lineup": "<:EventTimer:1213542180195536897> {0}  {1} > {2} > {3}\n",
             }
 
 # Note that 'fullname' needs to be the same as the name in the 'events' table in the database.
