@@ -11,6 +11,7 @@ from discord.ext import commands
 import asyncio
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from src.utils.hostpost_utils import discord_timestamp
 from src.utils.autoposts_utils import build_autopost_dict, clean_post
 from data.event_post_text import access_roles
 from src.views.hostpost_views import EditTemplateWizardView
@@ -334,7 +335,7 @@ class PostScheduler(commands.Cog):
                 if job.next_run_time == None:
                     output_text += f"{job.id}: paused\n"
                 else:
-                    output_text += f"{job.id}: Scheduled for {job.next_run_time.strftime("%Y-%m-%d %H:%M:%S")} (UTC)\n"
+                    output_text += f"{job.id}: Scheduled for {discord_timestamp(job.next_run_time, "short")}\n"
         await interaction.response.send_message(output_text)
 
 
