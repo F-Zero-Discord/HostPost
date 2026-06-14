@@ -100,7 +100,7 @@ def build_schedule(prix_list: list[dict[str, any]]) -> str:
         prix_dict = next((item for item in prix_info if item["shortname"] == prix["prix"]), None)
         if prix["prix"] == "classicprix" and prix["lineup"]:
             schedule_text += schedule_line["private_mp_lineup"].format(
-                    discord_timestamp(prix["time"], "short"), prix["lineup"][0], prix["lineup"][1], prix["lineup"][2])
+                    discord_timestamp(prix["time"], "short"), prix["lineup"][0].upper(), prix["lineup"][1].upper(), prix["lineup"][2].upper())
         else:
             match prix["prix_type"]:
                 case "public":
@@ -144,7 +144,7 @@ def build_gp_posts(event_name: str, prix_list: list[dict[str, any]]) -> list[str
 
         # Build prix start post
         if prix["prix"] == 'classicprix' and prix["lineup"]:
-            go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} <:Private:1227046530721251479> Private {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts NOW! <:GO:1226991337723662497>\n## {prix['lineup'][0]} > {prix['lineup'][1]} > {prix['lineup'][2]}\n## <:Private:1227046530721251479> Passcode: {str(random.randint(0,9999)).zfill(4)} <:Private:1227046530721251479>```")
+            go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} <:Private:1227046530721251479> Private {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts NOW! <:GO:1226991337723662497>\n## {prix['lineup'][0].upper()} > {prix['lineup'][1].upper()} > {prix['lineup'][2].upper()}\n## <:Private:1227046530721251479> Passcode: {str(random.randint(0,9999)).zfill(4)} <:Private:1227046530721251479>```")
         else:
             match prix["prix_type"]:
                 case "public":
