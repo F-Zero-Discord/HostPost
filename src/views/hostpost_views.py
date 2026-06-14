@@ -467,6 +467,4 @@ class WizardView(discord.ui.View):
             if self.current_step == self.num_prix:
                 button.label = "Finish"
             self.show_wizard_ui()
-            # await interaction.response.edit_message(content=self.get_content(), view=self)
-            # await interaction.message.edit(content=self.get_content(), view=self)
-            await interaction.response.send_message(content=self.get_content(), view=self)
+            await interaction.response.edit_message(content=self.get_content(), view=self)
