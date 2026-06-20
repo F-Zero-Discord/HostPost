@@ -25,7 +25,7 @@ prix_info = [
     {"shortname": "classicprix", "fullname": "Classic Mini Prix", "emoji": "<:MPClassicMini:1222897226880123022>", "mirror_emoji": "", "tickets": 1, "mode": "classic"},
     {"shortname": "miniprix", "fullname": "Mini Prix", "emoji": "<:MPMini:1195076264294363187>", "mirror_emoji": "", "tickets": 1, "mode": "99"},
     {"shortname": "glitchgp", "fullname": "Glitch GP", "emoji": "<:GPSecretKnight:1462611891447791700>", "mirror_emoji": "", "tickets": 3, "mode": "99"},
-    {"shortname": "worldtour", "fullname": "Frozen World Tour", "emoji": "<:WTMini:1462608159913934881>", "mirror_emoji": "", "tickets": 0, "mode": "99"},
+    {"shortname": "worldtour", "fullname": "World Tour", "emoji": "<:WTMini:1462608159913934881>", "mirror_emoji": "", "tickets": 0, "mode": "99"},
     {"shortname": "miniwt", "fullname": "Mini World Tour", "emoji": "<:WTMini:1462608159913934881>", "mirror_emoji": "", "tickets": 0, "mode": "99"}
 ]
 
