@@ -148,6 +148,7 @@ class WizardView(discord.ui.View):
         self.current_step: int = 1
         self.all_results: list[dict[str, any]] = []
         self.autopost: bool = False
+        self.validate: bool = True
         
         self.current_prix: str | None = None
         self.time_offset: int | None = None
@@ -215,6 +216,41 @@ class WizardView(discord.ui.View):
                     "Please select all three tracks:")
 
 
+    async def skip_validation_question(self, interaction: discord.Interaction):
+        self.clear_items()
+
+        skip_button = discord.ui.Button(label="Skip validation", style=discord.ButtonStyle.danger)
+        validate_button = discord.ui.Button(label="I'll validate", style=discord.ButtonStyle.success)
+
+        # Define what happens when they are clicked
+        async def skip_callback(interaction: discord.Interaction):
+            self.validate = False
+
+            message_text = "Event announcement and prix opening posts will be posted automatically. Results will be pushed without validation."
+            await interaction.response.edit_message(content=message_text, view=None)
+            #await interaction.message.edit(content=message_text, view=None)
+            self.stop() # This finally releases the view.wait() in hostpost_commands
+
+        async def validate_callback(interaction: discord.Interaction):
+            self.validate = True
+            
+            message_text = "Event announcement and prix opening posts will be posted automatically. Host will be prompted to validate results before posting."
+            await interaction.response.edit_message(content=message_text, view=None)
+            self.stop()
+
+        skip_button.callback = skip_callback
+        validate_button.callback = validate_callback
+
+        self.add_item(skip_button)
+        self.add_item(validate_button)
+
+        await interaction.response.edit_message(
+            content="### :bangbang: Would you like to validate final scores before scores are posted?", 
+            view=self
+        )
+
+
+
     async def auto_or_manual_post(self, interaction: discord.Interaction):
         self.clear_items()
 
@@ -223,14 +259,17 @@ class WizardView(discord.ui.View):
         manual_button = discord.ui.Button(label="I'll do it myself", style=discord.ButtonStyle.success)
         
         # Define what happens when they are clicked
-        async def auto_callback(inter: discord.Interaction):
+        async def auto_callback(interaction: discord.Interaction):
             self.autopost = True
-            await inter.response.edit_message(content="Event announcement and prix opening posts will be posted automatically.", view=None)
-            self.stop() # This finally releases the view.wait() in hostpost_commands
 
-        async def manual_callback(inter: discord.Interaction):
+            # Go to view with buttons asking if the user wants to skip the score validation component.
+            #await interaction.response.edit_message(content="", view=None)
+            await self.skip_validation_question(interaction)
+            #self.stop() # This finally releases the view.wait() in hostpost_commands
+
+        async def manual_callback(interaction: discord.Interaction):
             self.autopost = False
-            await inter.response.edit_message(content="User will post all event posts.", view=None)
+            await interaction.response.edit_message(content="User will post all event posts.", view=None)
             self.stop()
 
         auto_button.callback = auto_callback

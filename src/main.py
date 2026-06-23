@@ -14,7 +14,7 @@ GUILD_ID = discord.Object(id=os.getenv('SERVER_ID'))
 DATABASE = os.getenv('DB_NAME')
 
 handler = logging.FileHandler(filename='hostbot.log', encoding='utf-8', mode='w')
-handler.setLevel(logging.WARNING)
+handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s')
 handler.setFormatter(formatter)
 logging.getLogger('discord').setLevel(logging.WARNING)
@@ -65,7 +65,7 @@ bot = HostBot(command_prefix='!', intents=intents)
 
 def main():
     
-    bot.run(TOKEN, log_handler=handler, log_level=logging.WARNING)
+    bot.run(TOKEN, log_handler=handler, log_level=logging.INFO)
     
 if __name__ == '__main__':
     main()

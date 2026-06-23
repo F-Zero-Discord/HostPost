@@ -89,7 +89,8 @@ async def prepare_post_outputs(
     event: str,
     post_struct: list[dict],
     event_prix_info: list[dict],
-    autopost: bool 
+    autopost: bool,
+    validate: bool
     ) -> None:
     event_start_time = event_prix_info[0]["time"]
     print(f"The user selected autopost?: {autopost}.")
@@ -101,7 +102,7 @@ async def prepare_post_outputs(
         # We are currently in v1.
         post_struct = await edit_posts(interaction, post_struct)
         ps = PostScheduler(bot)
-        await ps.post_scheduler(interaction, event, post_struct, event_prix_info)
+        await ps.post_scheduler(interaction, event, post_struct, event_prix_info, validate)
 
     # To the interaction channel as separate posts
     await post_draft_posts_to_discord(interaction, post_struct)

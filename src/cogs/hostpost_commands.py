@@ -93,7 +93,8 @@ class EventBuilder(commands.Cog):
                     event, 
                     post_struct, 
                     view.all_results, 
-                    view.autopost)
+                    view.autopost,
+                    view.validate)
                 
                 if test_flag and view.autopost:
                     test_announce = "## NOTE: HostPost is in test mode.\nPost times will be overridden to begin immediately and be approximately 30 seconds apart. Check /list_all_autoposts to find the trigger times.\nNo roles will be pinged."

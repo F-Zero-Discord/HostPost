@@ -26,6 +26,7 @@ class PostScheduler(commands.Cog):
 
         load_dotenv()
         self.validation_channel_id = discord.Object(id=int(os.getenv('VALIDATION_CHANNEL'))).id
+        self.announce_channel_id = discord.Object(id=int(os.getenv('EVENT_ANNOUNCE_CHANNEL'))).id
 
 
     ''' Autocomplete methods '''
@@ -194,7 +195,8 @@ class PostScheduler(commands.Cog):
                                    interaction: discord.Interaction, 
                                    event_name: str, 
                                    job_name: str, 
-                                   channel_id: int
+                                   channel_id: int,
+                                   validate: bool
                                    ):
         ''' Takes database scores and updates the event results post with the 
             top three scores and the users associated with them. Also provides
@@ -248,27 +250,35 @@ class PostScheduler(commands.Cog):
         for job in self.bot.job_stack:
             if job["job_name"] == job_name:
                 job["message"] = results_message
-
-        # Post the event_results post in #playground with request to validate
-        
-        channel = self.bot.get_channel(self.validation_channel_id)
-        await channel.send(clean_post(results_message), allowed_mentions=discord.AllowedMentions.none())
-        host = None # Enter command to get host's discord.Member.mention here. Blank string until implemented.
-        if not host == None:
-            ping = host.mention
-        else:
-            ping = ""
-        validation_directions = f"""## {ping} Review the above {event_name} Results post and either\n\
+        if validate:
+            # Post the event_results post in #playground with request to validate
+            channel = self.bot.get_channel(self.validation_channel_id)
+            #await channel.send(clean_post(results_message), allowed_mentions=discord.AllowedMentions.none())
+            await channel.send(results_message, allowed_mentions=discord.AllowedMentions.none())
+            host = None # Enter command to get host's discord.Member.mention here. Blank string until implemented.
+            if not host == None:
+                ping = host.mention
+            else:
+                ping = ""
+            validation_directions = f"""## {ping} Review the above {event_name} Results post and either\n\
 - Approve immediate posting using the `/validate_results` command\n\
 - Edit the post using `/edit_pending_autopost` and then validate using `/validate_results`"""
-        await channel.send(validation_directions)
+            await channel.send(validation_directions)
+        else:
+            # Post the event_results post directly to event result channel
+            channel = self.bot.get_channel(self.announce_channel_id)
+            #await channel.send(clean_post(results_message))
+            await channel.send(results_message)
+            await asyncio.sleep(1) # sleep to ensure results post made before job removed.
+            self.remove_event_jobs(event_name)
 
 
     async def post_scheduler(self, 
                              interaction: discord.Interaction, 
                              event: str, 
                              post_struct: list[dict], 
-                             prix_info: list[dict]
+                             prix_info: list[dict],
+                             validate: bool
                              ):
         # Entry point for scheduling autoposts for an event from hostpost_commands.py.
         # Builds the autopost dict and then schedules the posts using the schedule_job method.
@@ -295,8 +305,9 @@ class PostScheduler(commands.Cog):
             next_run_time=scoreboard_close_time,
             misfire_grace_time=None,
             max_instances=1,
-            args=[interaction, event_name, autoposts[-1]['job_name'], autoposts[-1]['channel'].id]
+            args=[interaction, event_name, autoposts[-1]['job_name'], autoposts[-1]['channel'].id, validate]
         )
+
 
 
     # Simple testing command, if needed.
