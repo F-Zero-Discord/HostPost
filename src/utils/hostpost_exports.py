@@ -5,7 +5,7 @@ from datetime import datetime
 from src.views.hostpost_views import EditTemplateWizardView
 from src.cogs.autopost_commands import PostScheduler
 from src.utils.autoposts_utils import clean_post, insert_new_message_contents
-from data.event_post_text import automatable_posts
+from src.data.event_post_text import automatable_posts
 
 
 ''' Output for Draft Posts '''

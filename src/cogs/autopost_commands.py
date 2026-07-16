@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.utils.hostpost_utils import discord_timestamp
 from src.utils.autoposts_utils import build_autopost_dict, clean_post
-from data.event_post_text import access_roles
+from src.data.event_post_text import access_roles
 from src.views.hostpost_views import EditTemplateWizardView
 from src.fzd_db import get_db_connection, get_scheduled_event_id, get_event_scores
 

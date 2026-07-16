@@ -8,7 +8,7 @@ from discord.ext import commands
 from src.fzd_db import get_db_connection, get_event_schedule, get_tracks_from_db
 from src.views.hostpost_views import WizardView
 from src.utils.build_hostposts import build_posts
-from data.event_post_text import events, help_text_1, help_text_2, access_roles
+from src.data.event_post_text import events, help_text_1, help_text_2, access_roles
 from src.utils.hostpost_exports import prepare_post_outputs
 
 load_dotenv()

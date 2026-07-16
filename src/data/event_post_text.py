@@ -87,7 +87,7 @@ events = [
 ]
 
 custom_text = [
-    {"clean_driving": "\nFor each mWT you complete, you can earn 5,000 points for driving CLEAN. What is driving CLEAN? Driving CLEAN means you have to play without using unconventional strategies to farm points, like holding up a race to get gems.\n\n"}
+    {"clean_driving": "\nFor each WT you complete, you can earn 5,000 points for driving CLEAN. What is driving CLEAN? Driving CLEAN means you have to play without using unconventional strategies to farm points, like holding up a race to get gems.\n\n"}
 ]
 
 clean_driving_list = ["miniwt", "worldtour"]

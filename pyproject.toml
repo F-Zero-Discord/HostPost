@@ -22,6 +22,8 @@ dependencies = [
     "multidict==6.7.1",
     "propcache==0.4.1",
     "pycparser==3.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
     "pymysql==1.1.3",
     "python-dotenv==1.2.2",
     "typing-extensions==4.15.0",

@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import discord
-# from discord import ui
-from data.event_post_text import prix_info, time_offset_options
+from src.data.event_post_text import prix_info, time_offset_options
 
 
 def create_prix_option_set() -> discord.SelectOption:
