@@ -2,41 +2,35 @@
 Contains database commands for accessing event information. Basic functionality 
 taken from Nightmare's fzd_bot.
 """
-
-import os
+import logging
 import aiomysql
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import logging
-import sys
 
-#logging.basicConfig(filename='output.log', level=logging.DEBUG,
-#                    format='%(asctime)s - %(levelname)s - %(message)s')
+from src.settings import get_settings
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-stdout_handler = logging.StreamHandler(sys.stdout)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-stdout_handler.setFormatter(formatter)
-logger.addHandler(stdout_handler)
+
+
+async def _safe_rollback(conn, source: str = "unknown") -> None:
+    """Rollback only when possible; never mask the original exception."""
+    if not conn or getattr(conn, "closed", True):
+        return
+    try:
+        await conn.rollback()
+    except aiomysql.Error as rollback_error:
+        logger.warning(f"[DB] Rollback skipped ({source}): {rollback_error}")
 
 
 async def init_db_pool():
-    # global _connection_pool
     _connection_pool = None
+    settings = get_settings()
 
-    DB_CONFIG = {
-        'user': os.getenv("DB_USER"),
-        'password': os.getenv("DB_PASSWORD"),
-        'host': os.getenv("DB_HOST", "localhost"),
-        'db': os.getenv("DB_NAME"),
-        'port': int(os.getenv("DB_PORT", 3306)),
-        'autocommit': False
-    }
     POOL_SIZE = 16
     if _connection_pool is None:
         _connection_pool = await aiomysql.create_pool(
             minsize=1, maxsize=POOL_SIZE,
-            **DB_CONFIG
+            **settings.db_config
         )
         print("✅ Database pool created!")
     return _connection_pool
@@ -48,14 +42,22 @@ async def get_connection_from_pool(connection_pool: aiomysql.Pool):
     and returns it afterward (even if errors happen).
     Automatically rebuilds the pool if it breaks.
     """
-    # global _connection_pool
+
     conn = None
+    if connection_pool is None:
+        raise RuntimeError("Database pool is not initialized")
+    
+
     try:
-        # conn = await _connection_pool.acquire()
         conn = await connection_pool.acquire()
-        logger.info(f"[DB] Got connection from pool: id={id(conn)}")
-    except aiomysql.Error:
-        logger.warning("[DB CONNECTION] POOL IS DEAD...")
+        await conn.ping(reconnect=True)
+        logger.debug("[DB] Got connection from pool: id=%s", id(conn))
+    except Exception as e:
+        logger.warning(f"[DB CONNECTION] Failed to get healthy pooled connection: {e}")
+        if conn:
+            conn.close()
+            connection_pool.release(conn)
+        raise
     return conn
 
 @asynccontextmanager
@@ -68,24 +70,17 @@ async def get_db_connection(connection_pool: aiomysql.Pool):
     try:
         conn = await get_connection_from_pool(connection_pool)
          # Test connection quickly (cheap ping)
-        #conn.ping(reconnect=True, attempts=1, delay=0)
+        # conn.ping(reconnect=True, attempts=1, delay=0)
 
         yield conn  # hand off to the calling code
 
     except aiomysql.Error as e:
-        # Handle lost connection
-        #if conn:
-        #    release_connection(conn)
-        #    conn = None
-        #    print("[DB] Connection rolled back and released")
-        await conn.rollback()
-        print(f"[DB ERROR] Rolled back transaction: {e}")
-         
+        await _safe_rollback(conn, source="get_db_connection")
+        logger.error("[DB ERROR] %s", e)
         raise  # propagate error up to cog
 
     finally:
         if conn:
-            # _connection_pool.release(conn) #release_connection(conn)
             connection_pool.release(conn) #release_connection(conn)
 
 async def execute_query(conn, query, params=None, fetch="all", isProc:bool = False):
