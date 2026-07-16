@@ -35,9 +35,8 @@ def build_posts(event_name: str, prix_list: list[dict[str, any]]):
         discord_timestamp(prix_list[0]["time"], "relative"), discord_timestamp(prix_list[0]["time"], "short"))
     hour_post += build_schedule(prix_list)
     # Note: need to fix this so it checks all prix, not just the first
-    # if prix_list[0]["prix"] in clean_driving_list:
     if any(item.get("prix") in clean_driving_list for item in prix_list):
-        hour_post += [item["clean_driving"] for item in custom_text][0]
+        hour_post += [option["clean_driving"] for option in custom_text][0]
     hour_post += event_info.get("announcement_outro").format(
         "<:Tickets:1218943498338697256>" if tickets_needed == 1 else "<:Tickets:1218943498338697256>", tickets_needed)
     
