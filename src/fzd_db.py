@@ -208,6 +208,7 @@ async def get_hosting_schedule(db):
     params = ()
     return await execute_query(db, sql_host_schedule, params=params, fetch="all", isProc=False)
 
+
 async def update_host_in_db(db, scheduled_event_id, host_user_id):
     """ Updates the host column for the given scheduled event
     """
@@ -218,6 +219,7 @@ async def update_host_in_db(db, scheduled_event_id, host_user_id):
     params = (host_user_id, scheduled_event_id)
     await execute_query(db, sql_update_host, params=params, fetch=None)
 
+
 async def remove_host_from_event_db(db, scheduled_event_id):
     """ Sets the host_id column in events_scheduled to NULL for a given scheduled event.
     """
@@ -227,6 +229,44 @@ async def remove_host_from_event_db(db, scheduled_event_id):
                     """
     params = (scheduled_event_id,)
     await execute_query(db, sql_remove_host, params=params, fetch=None)
+
+
+async def get_event_host_id(db, scheduled_event_id: int) -> int | None:
+    """ Returns user id of a host if one assigned to scheduled event.
+        Otherwise returns None.
+    """
+    sql_get_user_id = """
+                        SELECT host_id
+                        FROM events_scheduled
+                        WHERE id = %s
+                    """
+    params = (scheduled_event_id,)
+    host_id = await execute_query(db, sql_get_user_id, params=params, fetch="one", isProc=False)
+    if host_id:
+        return host_id["host_id"]
+    else:
+        return None
+    
+
+async def get_host_info(db, host_user_id) -> dict[str] | None:
+    """ Retrieves host information from the database: specifically
+        - bot_display_name
+        - bot_pfp_filename
+    """
+    sql_get_host_info = """
+                        SELECT bot_display_name AS bot_display_name, 
+                                bot_pfp AS bot_pfp_filename
+                        FROM hosts
+                        WHERE user_id = %s
+                        """
+    params = (host_user_id,)
+    host_info_dict = await execute_query(db, sql_get_host_info, 
+                                         params=params, fetch="one", isProc=False)
+    if host_info_dict:
+        return host_info_dict
+    else:
+        return None
+
 
 async def check_db_for_hosting_support(db, DATABASE):
     """ Checks database columns of 'events_scheduled' to see if 'host_id' column exists. 
@@ -242,6 +282,7 @@ async def check_db_for_hosting_support(db, DATABASE):
     params = (DATABASE,)
     result = await execute_query(db, sql_check_host_column, params=params, fetch='one', isProc=False)
     return result['count'] > 0
+
 
 async def get_tracks_from_db(db):
     """ Gets track names from database and returns two lists: 

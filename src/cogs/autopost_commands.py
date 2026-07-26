@@ -15,7 +15,14 @@ from src.utils.hostpost_utils import discord_timestamp
 from src.utils.autoposts_utils import build_autopost_dict, clean_post
 from src.data.event_post_text import access_roles
 from src.views.hostpost_views import EditTemplateWizardView
-from src.fzd_db import get_db_connection, get_scheduled_event_id, get_event_scores
+from src.fzd_db import (
+    get_db_connection, 
+    get_scheduled_event_id, 
+    get_event_scores,
+    get_user_id,
+    get_event_host_id,
+    get_host_info
+)
 
 
 class PostScheduler(commands.Cog):
@@ -273,6 +280,15 @@ class PostScheduler(commands.Cog):
             self.remove_event_jobs(event_name)
 
 
+    async def change_name_and_pfp(self, interaction: discord.Interaction, 
+                                  host_info: dict[str]):
+        # new_pfp = discord.File(fp=f"images/{host_info["bot_pfp_filename"]}",filename=host_info["bot_pfp_filename"])
+        with open(f"images/{host_info["bot_pfp_filename"]}", "rb") as image_file:
+            new_pfp = image_file.read()
+        await interaction.guild.me.edit(nick=host_info["bot_display_name"])
+        await self.bot.user.edit(avatar=new_pfp)
+
+
     async def post_scheduler(self, 
                              interaction: discord.Interaction, 
                              event: str, 
@@ -283,6 +299,7 @@ class PostScheduler(commands.Cog):
         # Entry point for scheduling autoposts for an event from hostpost_commands.py.
         # Builds the autopost dict and then schedules the posts using the schedule_job method.
         autoposts = build_autopost_dict(event, post_struct, prix_info)
+        first_post_time = autoposts[0]['time']
         scoreboard_close_time = autoposts[-1]['time']
 
         # Check to ensure that the event is not already scheduled.
@@ -293,12 +310,34 @@ class PostScheduler(commands.Cog):
                 await interaction.followup.send(error_text)
                 return
 
+        # Get template job name
+        event_name: str = autoposts[-1]['job_name'].rsplit("_",1)[0]
+
+        # Schedule displayname and pfp change
+        async with get_db_connection(self.bot.db_pool) as db:
+            scheduled_event_id = await get_scheduled_event_id(db, event_name)
+            host_db_id = await get_event_host_id(db, scheduled_event_id)
+            if host_db_id:
+                host_info = await get_host_info(db, host_db_id) # returns a dict
+            else:
+                host_info = None
+        if host_info:
+            # Command must be scheduled
+            self.scheduler.add_job(
+                self.change_name_and_pfp,
+                id=f"hostUpdate_{event_name}",
+                next_run_time=first_post_time,
+                misfire_grace_time=None,
+                max_instances=1,
+                args=[interaction, host_info]
+            )
+
+        # Schedule event posts
         for index, post in enumerate(autoposts):
             print(f"Scheduling post #{index+1} for {event} named {post['job_name']}")
             await self.schedule_job(post)
         
         # Add job to pull scores from database and edit event results post
-        event_name: str = autoposts[-1]['job_name'].rsplit("_",1)[0]
         self.scheduler.add_job(
             self.prepare_results_post,
             id=f"getResults_{event_name}",

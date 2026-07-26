@@ -3,3 +3,4 @@ __pycache__/
 .env
 requirements.txt
 hostbot.log
+notes.txt

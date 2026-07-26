@@ -34,26 +34,37 @@ async def build_posts(bot, event_name: str, prix_list: list[dict[str, any]]):
 
     # Check for need for clean driving message
     for prix in prix_list:
-        if prix["prix"] in clean_driving_list:
+        if any(item.get("prix") in clean_driving_list for item in prix_list):
            map.custom_text = [item["clean_driving"] for item in custom_text][0]
         else:
             map.custom_text = ""
 
     # Build string mapping
+    map.event_name = event_name
     map.schedule = build_schedule(prix_list)
     map.start_time_short = discord_timestamp(prix_list[0]["time"], "short")
     map.start_time_relative = discord_timestamp(prix_list[0]["time"], "relative")
     map.tickets_number = tickets_needed
-    map.tickets_emoji = "<:Ticket:1194747589610967131>" if tickets_needed == 1 else "<:Tickets:1218943498338697256>"
+    if tickets_needed == 1:
+        map.tickets_emoji = "<:Ticket:1194747589610967131>"
+        map.tickets_word = "ticket" 
+    else: 
+        map.tickets_emoji = "<:Tickets:1218943498338697256>"
+        map.tickets_word = "tickets"
 
     # Get event info dictionary associated with event_name
     event_info = next((item for item in events if item["fullname"] == event_name), None)
 
-    # Build 1hr post
+    # Build 1hr, 10 min, and Results posts
     async with get_db_connection(bot.db_pool) as db:
         hour_template =  await get_post_template(db, event_name, "one_hour", None)
-    print(f"message template: {hour_template}")
+        ten_min_template =  await get_post_template(db, event_name, "ten_minute", None)
+        event_results_template = await get_post_template(db, event_name, "event_results", None)
     hour_post = rf"One Hour Post```{hour_template.format(**map.mapping).replace(r"\n", "\n")}```"
+    ten_min_post = rf"10 Minute Post```{ten_min_template.format(**map.mapping).replace(r"\n", "\n")}```"
+    event_results_post = rf"Results Post```{event_results_template.format(**map.mapping).replace(r"\n", "\n")}```"
+    
+    
     # hour_post = ""
     # hour_post += event_info.get("announcement_intro").format(
     #     discord_timestamp(prix_list[0]["time"], "relative"), discord_timestamp(prix_list[0]["time"], "short"))
@@ -70,16 +81,16 @@ async def build_posts(bot, event_name: str, prix_list: list[dict[str, any]]):
     # Build prix-start and prix-results posts
     go_posts, results_posts = build_gp_posts(event_name, prix_list)
 
-    # Build event results post
-    event_results_post = f"""
-    Results Post```# {event_name.upper()} \
-RESULTS ARE IN!\nAnd three pilots emerge victorious:\n\
-## :trophy: 1st Place – @[first]: [firstpoints] Points\n\
-## :second_place: 2nd Place – @[second]: [secondpoints] Points\n\
-## :third_place: 3rd Place – @[third]: [thirdpoints] Points\n\
-Congratulations to @(first), @(second), and @(third) for their \
-performances in a rough set of prix, and thank you \
-to everyone who participated!```"""
+#     # Build event results post
+#     event_results_post = f"""
+#     Results Post```# {event_name.upper()} \
+# RESULTS ARE IN!\nAnd three pilots emerge victorious:\n\
+# ## :trophy: 1st Place – @[first]: [firstpoints] Points\n\
+# ## :second_place: 2nd Place – @[second]: [secondpoints] Points\n\
+# ## :third_place: 3rd Place – @[third]: [thirdpoints] Points\n\
+# Congratulations to @(first), @(second), and @(third) for their \
+# performances in a rough set of prix, and thank you \
+# to everyone who participated!```"""
     
     # Build post structure
     post_struct = []
@@ -88,10 +99,10 @@ to everyone who participated!```"""
         "post_text": hour_post,
         "post_type": "1hr"
     })
-    # Replace hour post header withe 10 min post header
-    header_index = hour_post.find('`')
-    if header_index != 1:
-        ten_min_post = "10 Minute Post" + hour_post[header_index:]
+    # # Replace hour post header withe 10 min post header
+    # header_index = hour_post.find('`')
+    # if header_index != 1:
+    #     ten_min_post = "10 Minute Post" + hour_post[header_index:]
     post_struct.append({
         "name": "10 Minute Post",
         "post_text": ten_min_post,
