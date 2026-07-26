@@ -1,5 +1,9 @@
 from datetime import datetime, timedelta, timezone
 import discord
+<<<<<<< HEAD
+=======
+# from discord import ui
+>>>>>>> d4524a5 (Proof of concept in putting templates in the database and pulling from there.)
 from src.data.event_post_text import prix_info, time_offset_options
 
 

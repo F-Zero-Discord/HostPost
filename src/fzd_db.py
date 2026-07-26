@@ -3,6 +3,8 @@ Contains database commands for accessing event information. Basic functionality
 taken from Nightmare's fzd_bot.
 """
 import logging
+import os
+from typing import Literal
 import aiomysql
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -258,3 +260,64 @@ async def get_tracks_from_db(db):
     classic_tracks = await execute_query(db, sql_get_classic_tracks, params=None, fetch='all', isProc=False)
     ninetynine_tracks = await execute_query(db, sql_get_99_tracks, params=None, fetch='all', isProc=False)
     return [track['name'] for track in classic_tracks], [track['name'] for track in ninetynine_tracks]
+
+
+async def check_for_custom_message(db, event_name: str, 
+                            post_type: Literal[
+                                "one_hour",
+                                "ten_minute",
+                                "prix_open",
+                                "prix_result",
+                                "event_results"],
+                            host_id: int | None):
+    """
+    """
+    sql_check_host_message  = """
+                            SELECT COUNT(*)
+                            FROM event_messages A
+                            INNER JOIN events B ON A.event_id = B.id 
+                            WHERE B.name = %s 
+                                AND A.message_type = %s 
+                                AND A.host_id = %s
+                                    """
+    params = (event_name, post_type, host_id,)
+    num_posts = await execute_query(db, sql_check_host_message, params=params, fetch='one', isProc=False)
+    if num_posts:
+        return True
+    else:
+        return False
+
+
+async def get_post_template(db, event_name: str, 
+                            post_type: Literal[
+                                "one_hour",
+                                "ten_minute",
+                                "prix_open",
+                                "prix_result",
+                                "event_results"],
+                            host_id: int | None):
+    """
+    """
+    # Check to see if host_id has an assigned post of post_type in post table
+    if not host_id or not check_for_custom_message(db, event_name, post_type, host_id):
+        sql_message = """
+                SELECT A.post AS post
+                FROM event_messages A
+                INNER JOIN events B ON A.event_id = B.id 
+                WHERE B.name = %s
+                    AND A.message_type = %s
+                    AND A.host_id <=> NULL
+                    """
+        params = (event_name, post_type,)
+    else:
+        sql_message = """
+                SELECT A.post AS post
+                FROM event_messages A
+                INNER JOIN events B ON A.event_id = B.id 
+                WHERE B.name = %s
+                    AND A.message_type = %s
+                    AND A.host_id <=> %s
+                    """
+        params = (event_name, post_type, host_id,)
+    message = await execute_query(db, sql_message, params=params, fetch='one', isProc=False)
+    return message["post"]

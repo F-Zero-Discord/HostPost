@@ -5,12 +5,15 @@ Functions in this module take the following to build posts for regular weekly ev
 
 
 '''
+from string import Template
 import random
 from datetime import datetime, timedelta
 from src.utils.hostpost_utils import discord_timestamp, round_to_30_minutes
+from src.data.template_mapping import TemplateMap
 from src.data.event_post_text import prix_info, schedule_line, events, custom_text, clean_driving_list
+from src.fzd_db import get_db_connection, get_post_template
 
-def build_posts(event_name: str, prix_list: list[dict[str, any]]):
+async def build_posts(bot, event_name: str, prix_list: list[dict[str, any]]):
     # Format of event_dict:
     #   [
     #   {gp_name: value (str)
@@ -19,6 +22,9 @@ def build_posts(event_name: str, prix_list: list[dict[str, any]]):
     #   ...
     #   ]
 
+    # Create mapping for event
+    map = TemplateMap()
+
     # Get number of tickets needed (sure there is a list comprehension for this but too much brainpower)
     tickets_needed = 0
     for prix in prix_list:
@@ -26,23 +32,40 @@ def build_posts(event_name: str, prix_list: list[dict[str, any]]):
             tickets_needed += next((item for item in prix_info if item["shortname"] == prix["prix"]), None)["tickets"]
     print(f"Tickets needed for {event_name}: {tickets_needed}")
 
+    # Check for need for clean driving message
+    for prix in prix_list:
+        if prix["prix"] in clean_driving_list:
+           map.custom_text = [item["clean_driving"] for item in custom_text][0]
+        else:
+            map.custom_text = ""
+
+    # Build string mapping
+    map.schedule = build_schedule(prix_list)
+    map.start_time_short = discord_timestamp(prix_list[0]["time"], "short")
+    map.start_time_relative = discord_timestamp(prix_list[0]["time"], "relative")
+    map.tickets_number = tickets_needed
+    map.tickets_emoji = "<:Ticket:1194747589610967131>" if tickets_needed == 1 else "<:Tickets:1218943498338697256>"
+
     # Get event info dictionary associated with event_name
     event_info = next((item for item in events if item["fullname"] == event_name), None)
 
     # Build 1hr post
-    hour_post = ""
-    hour_post += event_info.get("announcement_intro").format(
-        discord_timestamp(prix_list[0]["time"], "relative"), discord_timestamp(prix_list[0]["time"], "short"))
-    hour_post += build_schedule(prix_list)
-    # Note: need to fix this so it checks all prix, not just the first
-    if any(item.get("prix") in clean_driving_list for item in prix_list):
-        hour_post += [option["clean_driving"] for option in custom_text][0]
-    hour_post += event_info.get("announcement_outro").format(
-        "<:Tickets:1218943498338697256>" if tickets_needed == 1 else "<:Tickets:1218943498338697256>", tickets_needed)
+    async with get_db_connection(bot.db_pool) as db:
+        hour_template =  await get_post_template(db, event_name, "one_hour", None)
+    print(f"message template: {hour_template}")
+    hour_post = rf"One Hour Post```{hour_template.format(**map.mapping).replace(r"\n", "\n")}```"
+    # hour_post = ""
+    # hour_post += event_info.get("announcement_intro").format(
+    #     discord_timestamp(prix_list[0]["time"], "relative"), discord_timestamp(prix_list[0]["time"], "short"))
+    # hour_post += build_schedule(prix_list)
+    # if prix_list[0]["prix"] in clean_driving_list:
+    #     hour_post += [item["clean_driving"] for item in custom_text][0]
+    # hour_post += event_info.get("announcement_outro").format(
+    #     "<:Ticket:1194747589610967131>" if tickets_needed == 1 else "<:Tickets:1218943498338697256>", tickets_needed)
     
-    # Note: passing this as a string for current testing purposes. Will ultimately return a list of strings, with 
-    # each string being a post.
-    hour_post = f"One Hour Post```{hour_post}```"
+    # # Note: passing this as a string for current testing purposes. Will ultimately return a list of strings, with 
+    # # each string being a post.
+    # hour_post = f"One Hour Post```{hour_post}```"
     
     # Build prix-start and prix-results posts
     go_posts, results_posts = build_gp_posts(event_name, prix_list)

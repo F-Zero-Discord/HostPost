@@ -85,7 +85,7 @@ class EventBuilder(commands.Cog):
                     return
                 
                 # Build posts using functions in module build_hostposts.
-                post_struct = build_posts(event, view.all_results)
+                post_struct = await build_posts(self.bot, event, view.all_results)
                 
                 await prepare_post_outputs(
                     self.bot,
