@@ -11,13 +11,20 @@ from datetime import datetime, timedelta
 from src.utils.hostpost_utils import discord_timestamp, round_to_30_minutes
 from src.data.template_mapping import TemplateMap
 from src.data.event_post_text import prix_info, schedule_line, events, custom_text, clean_driving_list
-from src.fzd_db import get_db_connection, get_post_template
+from src.fzd_db import (
+    get_scheduled_event_id,
+    get_event_host_id,
+    get_db_connection, 
+    get_post_template
+)
 
-async def build_posts(bot, event_name: str, prix_list: list[dict[str, any]]):
-    # Format of event_dict:
+async def build_posts(bot, event_name: str, 
+                      scheduled_event_name: str, 
+                      prix_list: list[dict[str, any]]):
+    # Format of prix_list:
     #   [
-    #   {gp_name: value (str)
-    #   gp_time: value (datetime)
+    #   {name: value (str)
+    #   time: value (datetime)
     #   prix_type: value (str, e.g. "public" or "private")}
     #   ...
     #   ]
@@ -53,44 +60,23 @@ async def build_posts(bot, event_name: str, prix_list: list[dict[str, any]]):
         map.tickets_word = "tickets"
 
     # Get event info dictionary associated with event_name
-    event_info = next((item for item in events if item["fullname"] == event_name), None)
+    # event_info = next((item for item in events if item["fullname"] == event_name), None)
+
 
     # Build 1hr, 10 min, and Results posts
     async with get_db_connection(bot.db_pool) as db:
-        hour_template =  await get_post_template(db, event_name, "one_hour", None)
-        ten_min_template =  await get_post_template(db, event_name, "ten_minute", None)
-        event_results_template = await get_post_template(db, event_name, "event_results", None)
+        scheduled_event_id = await get_scheduled_event_id(db, scheduled_event_name)
+        host_id = await get_event_host_id(db, scheduled_event_id)
+        # custom_message = await check_for_custom_message(db, event_name, post_type, host_id)
+        hour_template =  await get_post_template(db, event_name, "one_hour", host_id)
+        ten_min_template =  await get_post_template(db, event_name, "ten_minute", host_id)
+        event_results_template = await get_post_template(db, event_name, "event_results", host_id)
     hour_post = rf"One Hour Post```{hour_template.format(**map.mapping).replace(r"\n", "\n")}```"
     ten_min_post = rf"10 Minute Post```{ten_min_template.format(**map.mapping).replace(r"\n", "\n")}```"
     event_results_post = rf"Results Post```{event_results_template.format(**map.mapping).replace(r"\n", "\n")}```"
     
-    
-    # hour_post = ""
-    # hour_post += event_info.get("announcement_intro").format(
-    #     discord_timestamp(prix_list[0]["time"], "relative"), discord_timestamp(prix_list[0]["time"], "short"))
-    # hour_post += build_schedule(prix_list)
-    # if prix_list[0]["prix"] in clean_driving_list:
-    #     hour_post += [item["clean_driving"] for item in custom_text][0]
-    # hour_post += event_info.get("announcement_outro").format(
-    #     "<:Ticket:1194747589610967131>" if tickets_needed == 1 else "<:Tickets:1218943498338697256>", tickets_needed)
-    
-    # # Note: passing this as a string for current testing purposes. Will ultimately return a list of strings, with 
-    # # each string being a post.
-    # hour_post = f"One Hour Post```{hour_post}```"
-    
     # Build prix-start and prix-results posts
     go_posts, results_posts = build_gp_posts(event_name, prix_list)
-
-#     # Build event results post
-#     event_results_post = f"""
-#     Results Post```# {event_name.upper()} \
-# RESULTS ARE IN!\nAnd three pilots emerge victorious:\n\
-# ## :trophy: 1st Place – @[first]: [firstpoints] Points\n\
-# ## :second_place: 2nd Place – @[second]: [secondpoints] Points\n\
-# ## :third_place: 3rd Place – @[third]: [thirdpoints] Points\n\
-# Congratulations to @(first), @(second), and @(third) for their \
-# performances in a rough set of prix, and thank you \
-# to everyone who participated!```"""
     
     # Build post structure
     post_struct = []

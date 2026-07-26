@@ -314,7 +314,7 @@ async def check_for_custom_message(db, event_name: str,
     """
     """
     sql_check_host_message  = """
-                            SELECT COUNT(*)
+                            SELECT COUNT(*) AS count
                             FROM event_messages A
                             INNER JOIN events B ON A.event_id = B.id 
                             WHERE B.name = %s 
@@ -323,7 +323,7 @@ async def check_for_custom_message(db, event_name: str,
                                     """
     params = (event_name, post_type, host_id,)
     num_posts = await execute_query(db, sql_check_host_message, params=params, fetch='one', isProc=False)
-    if num_posts:
+    if num_posts['count'] > 0:
         return True
     else:
         return False
@@ -340,17 +340,13 @@ async def get_post_template(db, event_name: str,
     """
     """
     # Check to see if host_id has an assigned post of post_type in post table
-    if not host_id or not check_for_custom_message(db, event_name, post_type, host_id):
-        sql_message = """
-                SELECT A.post AS post
-                FROM event_messages A
-                INNER JOIN events B ON A.event_id = B.id 
-                WHERE B.name = %s
-                    AND A.message_type = %s
-                    AND A.host_id <=> NULL
-                    """
-        params = (event_name, post_type,)
-    else:
+    is_custom_message: bool = False
+    if host_id:
+        is_custom_message = await check_for_custom_message(db, 
+                                                           event_name, 
+                                                           post_type, 
+                                                           host_id)
+    if host_id and is_custom_message:
         sql_message = """
                 SELECT A.post AS post
                 FROM event_messages A
@@ -360,5 +356,16 @@ async def get_post_template(db, event_name: str,
                     AND A.host_id <=> %s
                     """
         params = (event_name, post_type, host_id,)
+    else:
+        sql_message = """
+                SELECT A.post AS post
+                FROM event_messages A
+                INNER JOIN events B ON A.event_id = B.id 
+                WHERE B.name = %s
+                    AND A.message_type = %s
+                    AND A.host_id <=> NULL
+                    """
+        params = (event_name, post_type,)
+        
     message = await execute_query(db, sql_message, params=params, fetch='one', isProc=False)
     return message["post"]

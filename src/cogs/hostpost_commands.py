@@ -67,6 +67,10 @@ class EventBuilder(commands.Cog):
                 default_start_time = next(
                     (item["utc_start"] for item in available_event_dict if item["event"] == event), None)
                 default_start_time = default_start_time.replace(tzinfo=timezone.utc)
+                # Constructed the same way that the event trigger constructs name. Somewhat
+                #   backwards. Improve via using scheduled_events rather than the view as a
+                #   basis for identifying the events to prepare posts for.
+                scheduled_event_name = f"{default_start_time.strftime('%Y-%m-%d')} | {event}"
                 use_simple_time = (timetype == "Simple")
 
                 view = WizardView(num_prix, 
@@ -85,7 +89,7 @@ class EventBuilder(commands.Cog):
                     return
                 
                 # Build posts using functions in module build_hostposts.
-                post_struct = await build_posts(self.bot, event, view.all_results)
+                post_struct = await build_posts(self.bot, event, scheduled_event_name, view.all_results)
                 
                 await prepare_post_outputs(
                     self.bot,
