@@ -2,13 +2,14 @@
 Autopost logic
 '''
 import re
+import discord
 from datetime import datetime, timezone, timedelta
 from src.settings import get_settings
 from src.utils.build_hostposts import round_to_30_minutes
 
 
 ''' Global Test Variables '''
-if get_settings().test_flag == '1':
+if int(get_settings().test_flag) == 1:
     test_flag = True
 else:
     test_flag = False
@@ -43,8 +44,9 @@ def build_autopost_dict(event: str, post_struct: list[dict], prix_info: list[dic
 
     # Get discord channels where posts will go. Note: test and production channels are toggled directly in the .env file.
     settings = get_settings()
-    hour_post_channel = settings.event_announce_channel
-    other_post_channel = settings.engage_channel
+    hour_post_channel = discord.Object(id=int(settings.event_announce_channel))
+    other_post_channel = discord.Object(id=int(settings.engage_channel))
+    print(f"hour_post_channel: {hour_post_channel}")
 
     autoposts: list[dict] = []
     start_time = prix_info[0]['time']

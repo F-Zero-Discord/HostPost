@@ -30,8 +30,8 @@ class PostScheduler(commands.Cog):
         self.interaction: discord.Interaction | None = None
 
         settings = get_settings()
-        self.validation_channel_id = settings.validation_channel
-        self.announce_channel_id = settings.event_announce_channel
+        self.validation_channel_id = discord.Object(id=int(settings.validation_channel)).id
+        self.announce_channel_id = discord.Object(id=int(settings.event_announce_channel)).id
 
 
     ''' Autocomplete methods '''

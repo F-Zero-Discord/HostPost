@@ -53,7 +53,7 @@ class HostingSchedule(commands.Cog):
 
 
     @staticmethod
-    def build_schedule_embed(event_dict: list[dict]):
+    def build_schedule_embed(event_dict: list[dict]) -> discord.Embed:
         schedule_board = discord.Embed(
                             title="🏁 Host Signups for Scheduled Events", 
                             description=f"*As of {discord_timestamp(datetime.now(), 'long')}*", 
@@ -62,6 +62,8 @@ class HostingSchedule(commands.Cog):
                         
         schedule_text = HostingSchedule.format_events_for_schedule_board(event_dict)
         schedule_board.add_field(name="", value=schedule_text, inline=False)
+
+        return schedule_board
 
 
     async def update_live_board(self, interaction: discord.Interaction, event_dict: list[dict]):
@@ -76,7 +78,7 @@ class HostingSchedule(commands.Cog):
                 channel = await self.bot.fetch_channel(channel_id)
             
             message = await channel.fetch_message(get_settings().hosting_schedule_message_id)
-            await message.edit(content=schedule_board)
+            await message.edit(embed=schedule_board)
 
         except discord.NotFound:
             await interaction.send("Error: The message or channel could not be found.")
@@ -186,16 +188,26 @@ class HostingSchedule(commands.Cog):
                 await self.update_live_board(interaction, event_dict)
             await interaction.response.send_message(f"{event} updated to have no host.", ephemeral=False)                    
 
-
         except Exception as e:
             print(f"Error occurred while fetching hosting schedule: {e}")
             await interaction.response.send_message("An error occurred while fetching the hosting schedule.", ephemeral=True)
 
+
+    @app_commands.command(name="anchor_post", description="create anchor post")
+    @discord.app_commands.checks.has_any_role(*access_roles)
+    async def anchor_post(self, interaction: discord.Interaction):
+        """ Temporary command to create a message for the bot to update the schedule in.
+        """
+        post_channel = self.bot.get_channel(
+            discord.Object(id=int(get_settings().hosting_schedule_channel)).id)
+        await post_channel.send("anchor post")
+        await interaction.response.send_message("Anchor message sent.")
             
 
     @hosting_schedule.error
     @update_host_for_event.error
     @remove_host_from_event.error
+    @anchor_post.error
     async def role_error(self, interaction: discord.Interaction, error):
         if isinstance(error, app_commands.MissingAnyRole):
             await interaction.response.send_message(
