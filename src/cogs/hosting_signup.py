@@ -203,7 +203,7 @@ class HostingSchedule(commands.Cog):
         schedule_board = HostingSchedule.build_schedule_embed(event_dict=event_dict)
         post_channel = self.bot.get_channel(
             discord.Object(id=int(get_settings().hosting_schedule_channel)).id)
-        await post_channel.send(schedule_board)
+        await post_channel.send(embed=schedule_board)
         await interaction.response.send_message("Anchor message sent.")
             
 
