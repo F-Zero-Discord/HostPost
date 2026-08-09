@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     validation_channel: int | None
     error_alert_channel_id: int | None
     test_flag: int | None = 0
-    # hosting_schedule_channel: int | None
-    # hosting_schedule_message_id: int | None
+    hosting_schedule_channel: int | None
+    hosting_schedule_message_id: int | None
 
 
     @field_validator("error_alert_channel_id", mode="before")

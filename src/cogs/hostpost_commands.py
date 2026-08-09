@@ -137,7 +137,8 @@ class EventBuilder(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    GUILD_ID=discord.Object(id=os.getenv('SERVER_ID'))
+    server_id = get_settings().server_id
+    GUILD_ID = discord.Object(id=server_id)
     # Initialize list of events. This is updated during slash command. Initialization and 
     # update are necessary to not have to continually pull from the database during autocomplete.
     async with get_db_connection(bot.db_pool) as db:
@@ -146,8 +147,5 @@ async def setup(bot: commands.Bot):
     event_list = [s['event'] for s in available_event_dict if 'event' in s]
     await bot.add_cog(
         EventBuilder(
-            bot, 
-            event_list, 
-            classic_tracks, 
-            ninetynine_tracks), 
-            guild=get_settings().server_id)
+            bot, event_list, classic_tracks, ninetynine_tracks), 
+        guild=GUILD_ID)

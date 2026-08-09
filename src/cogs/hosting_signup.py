@@ -63,9 +63,27 @@ class HostingSchedule(commands.Cog):
         schedule_text = HostingSchedule.format_events_for_schedule_board(event_dict)
         schedule_board.add_field(name="", value=schedule_text, inline=False)
 
-    @staticmethod
-    async def update_live_board(event_dict: list[dict]):
-        ...
+
+    async def update_live_board(self, interaction: discord.Interaction, event_dict: list[dict]):
+        """
+        """
+        try:
+            channel_id = get_settings().hosting_schedule_channel
+            schedule_board = self.build_schedule_embed(event_dict)
+            channel = self.bot.get_channel(channel_id)
+            if channel is None:
+                # Fallback if the channel is not in the bot's internal cache
+                channel = await self.bot.fetch_channel(channel_id)
+            
+            message = await channel.fetch_message(get_settings().hosting_schedule_message_id)
+            await message.edit(content=schedule_board)
+
+        except discord.NotFound:
+            await interaction.send("Error: The message or channel could not be found.")
+        except discord.Forbidden:
+            await interaction.send("Error: The bot does not have permissions to edit or view this.")
+        except discord.HTTPException as e:
+            await interaction.send(f"An error occurred: {e}")
 
     
     async def get_or_create_db_user(self, db, discord_user):
@@ -130,7 +148,7 @@ class HostingSchedule(commands.Cog):
                 db_user_id = await self.get_or_create_db_user(db, host)
                 await update_host_in_db(db, event_info['event_id'], db_user_id)
                 event_dict = await get_hosting_schedule(db)
-                await HostingSchedule.update_live_board(event_dict)
+                await self.update_live_board(interaction, event_dict)
             await interaction.response.send_message(f"Host for {event} updated to {host.display_name}.", ephemeral=False)                
 
         except Exception as e:
@@ -165,7 +183,7 @@ class HostingSchedule(commands.Cog):
             async with get_db_connection(self.bot.db_pool) as db:
                 await remove_host_from_event_db(db, event_info['event_id'])
                 event_dict = await get_hosting_schedule(db)
-                await HostingSchedule.update_live_board(event_dict)
+                await self.update_live_board(interaction, event_dict)
             await interaction.response.send_message(f"{event} updated to have no host.", ephemeral=False)                    
 
 
@@ -193,9 +211,11 @@ class HostingSchedule(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
+    server_id = get_settings().server_id
+    GUILD_ID = discord.Object(id=server_id)
     # Initialize list of events. This is updated during slash command. Initialization and 
     # update are necessary to not have to continually pull from the database during autocomplete.
     async with get_db_connection(bot.db_pool) as db:
         event_dict = await get_hosting_schedule(db)
         event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
-        await bot.add_cog(HostingSchedule(bot, event_list), guild=get_settings().server_id)
+        await bot.add_cog(HostingSchedule(bot, event_list), guild=GUILD_ID)

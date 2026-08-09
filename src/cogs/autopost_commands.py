@@ -536,4 +536,6 @@ class PostScheduler(commands.Cog):
             self.push_job.autocomplete("job_name")(self.job_autocomplete)
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(PostScheduler(bot), guild=get_settings().server_id)
+    server_id = get_settings().server_id
+    GUILD_ID = discord.Object(id=server_id)
+    await bot.add_cog(PostScheduler(bot), guild=GUILD_ID)
