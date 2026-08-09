@@ -198,9 +198,12 @@ class HostingSchedule(commands.Cog):
     async def anchor_post(self, interaction: discord.Interaction):
         """ Temporary command to create a message for the bot to update the schedule in.
         """
+        async with get_db_connection(self.bot.db_pool) as db:
+            event_dict = await get_hosting_schedule(db)
+        schedule_board = HostingSchedule.build_schedule_embed(event_dict=event_dict)
         post_channel = self.bot.get_channel(
             discord.Object(id=int(get_settings().hosting_schedule_channel)).id)
-        await post_channel.send("anchor post")
+        await post_channel.send(schedule_board)
         await interaction.response.send_message("Anchor message sent.")
             
 
