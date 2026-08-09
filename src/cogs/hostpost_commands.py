@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import discord
 from discord import app_commands
 from discord.ext import commands
+from src.settings import get_settings
 from src.fzd_db import get_db_connection, get_event_schedule, get_tracks_from_db
 from src.views.hostpost_views import WizardView
 from src.utils.build_hostposts import build_posts
@@ -143,4 +144,10 @@ async def setup(bot: commands.Bot):
         available_event_dict = await get_event_schedule(db)
         classic_tracks, ninetynine_tracks = await get_tracks_from_db(db)
     event_list = [s['event'] for s in available_event_dict if 'event' in s]
-    await bot.add_cog(EventBuilder(bot, event_list, classic_tracks, ninetynine_tracks), guild=GUILD_ID)
+    await bot.add_cog(
+        EventBuilder(
+            bot, 
+            event_list, 
+            classic_tracks, 
+            ninetynine_tracks), 
+            guild=get_settings().server_id)

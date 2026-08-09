@@ -7,19 +7,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import logging
-from dotenv import load_dotenv
 
 from src.error_alerts import send_error_alert
 from src.settings import configure_logging, get_settings
 
 from src.fzd_db import init_db_pool, get_db_connection, check_db_for_hosting_support
 from src.utils.scheduler import init_scheduler
-
-
-# load_dotenv()
-# TOKEN = os.getenv('DISCORD_TOKEN')
-# GUILD_ID = discord.Object(id=os.getenv('SERVER_ID'))
-# DATABASE = os.getenv('DB_NAME')
 
 logger = logging.getLogger(__name__)
 

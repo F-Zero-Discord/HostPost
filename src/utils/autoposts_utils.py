@@ -1,18 +1,14 @@
 '''
 Autopost logic
 '''
-import os
 import re
-import discord
-from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
+from src.settings import get_settings
 from src.utils.build_hostposts import round_to_30_minutes
 
 
 ''' Global Test Variables '''
-load_dotenv()
-TEST_FLAG = os.getenv('TEST_FLAG')
-if TEST_FLAG == '1':
+if get_settings().test_flag == '1':
     test_flag = True
 else:
     test_flag = False
@@ -46,9 +42,9 @@ def build_autopost_dict(event: str, post_struct: list[dict], prix_info: list[dic
         print("Test mode is ON.")
 
     # Get discord channels where posts will go. Note: test and production channels are toggled directly in the .env file.
-    load_dotenv()
-    hour_post_channel = discord.Object(id=int(os.getenv('EVENT_ANNOUNCE_CHANNEL')))
-    other_post_channel = discord.Object(id=int(os.getenv('ENGAGE_CHANNEL')))
+    settings = get_settings()
+    hour_post_channel = settings.event_announce_channel
+    other_post_channel = settings.engage_channel
 
     autoposts: list[dict] = []
     start_time = prix_info[0]['time']

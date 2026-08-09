@@ -3,7 +3,6 @@ Contains database commands for accessing event information. Basic functionality
 taken from Nightmare's fzd_bot.
 """
 import logging
-import os
 from typing import Literal
 import aiomysql
 from contextlib import asynccontextmanager

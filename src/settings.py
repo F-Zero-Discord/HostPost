@@ -24,7 +24,14 @@ class Settings(BaseSettings):
     db_port: int = 3306
 
     log_level: str = "INFO"
+
+    event_announce_channel: int | None
+    engage_channel: int | None
+    validation_channel: int | None
     error_alert_channel_id: int | None
+    test_flag: int | None = 0
+    # hosting_schedule_channel: int | None
+    # hosting_schedule_message_id: int | None
 
 
     @field_validator("error_alert_channel_id", mode="before")

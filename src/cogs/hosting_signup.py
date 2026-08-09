@@ -2,14 +2,12 @@
 Contains slash commands and associated views to allow users to view which events are hosted and 
 sign up for events.
 """
-import os
-from dotenv import load_dotenv
 from datetime import datetime, UTC
 import discord
 from discord import app_commands
 from discord.ext import commands
+from src.settings import get_settings
 from src.fzd_db import (get_db_connection, 
-                        check_db_for_hosting_support,
                         get_hosting_schedule, 
                         add_new_user, 
                         get_user_id, 
@@ -34,7 +32,8 @@ class HostingSchedule(commands.Cog):
     
 
     ''' Helper Methods '''
-    def format_events_for_schedule_board(self, event_dict):
+    @staticmethod
+    def format_events_for_schedule_board(event_dict):
         schedule_text = ''
         for i, event in enumerate(event_dict):
             if not event['host']:
@@ -51,6 +50,23 @@ class HostingSchedule(commands.Cog):
             if i != len(event_dict) - 1:
                 schedule_text += "\n"
         return schedule_text
+
+
+    @staticmethod
+    def build_schedule_embed(event_dict: list[dict]):
+        schedule_board = discord.Embed(
+                            title="🏁 Host Signups for Scheduled Events", 
+                            description=f"*As of {discord_timestamp(datetime.now(), 'long')}*", 
+                            color=discord.Color.orange()
+                            )
+                        
+        schedule_text = HostingSchedule.format_events_for_schedule_board(event_dict)
+        schedule_board.add_field(name="", value=schedule_text, inline=False)
+
+    @staticmethod
+    async def update_live_board(event_dict: list[dict]):
+        ...
+
     
     async def get_or_create_db_user(self, db, discord_user):
         """ Gets the user id from the database given a discord user. If the user is not in the database, creates a new user and returns the id.
@@ -78,14 +94,7 @@ class HostingSchedule(commands.Cog):
                 await interaction.response.send_message("No events are currently scheduled.", ephemeral=True)
                 return
             else:
-                schedule_board = discord.Embed(
-                    title="🏁 Host Signups for Scheduled Events", 
-                    description=f"*As of {discord_timestamp(datetime.now(), 'long')}*", 
-                    color=discord.Color.orange()
-                    )
-                
-                schedule_text = self.format_events_for_schedule_board(event_dict)
-                schedule_board.add_field(name="", value=schedule_text, inline=False)
+                schedule_board = HostingSchedule.build_schedule_embed(event_dict=event_dict)
                 await interaction.response.send_message(embed=schedule_board, ephemeral=False)
 
         except Exception as e:
@@ -120,7 +129,9 @@ class HostingSchedule(commands.Cog):
             async with get_db_connection(self.bot.db_pool) as db:
                 db_user_id = await self.get_or_create_db_user(db, host)
                 await update_host_in_db(db, event_info['event_id'], db_user_id)
-            await interaction.response.send_message(f"Host for {event} updated to {host.display_name}.", ephemeral=False)
+                event_dict = await get_hosting_schedule(db)
+                await HostingSchedule.update_live_board(event_dict)
+            await interaction.response.send_message(f"Host for {event} updated to {host.display_name}.", ephemeral=False)                
 
         except Exception as e:
             print(f"Error occurred while fetching hosting schedule: {e}")
@@ -153,7 +164,9 @@ class HostingSchedule(commands.Cog):
             print(f'Scheduled event id: {event_info['event_id']}')
             async with get_db_connection(self.bot.db_pool) as db:
                 await remove_host_from_event_db(db, event_info['event_id'])
-            await interaction.response.send_message(f"{event} updated to have no host.", ephemeral=False)
+                event_dict = await get_hosting_schedule(db)
+                await HostingSchedule.update_live_board(event_dict)
+            await interaction.response.send_message(f"{event} updated to have no host.", ephemeral=False)                    
 
 
         except Exception as e:
@@ -180,10 +193,9 @@ class HostingSchedule(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    GUILD_ID=discord.Object(id=os.getenv('SERVER_ID'))
     # Initialize list of events. This is updated during slash command. Initialization and 
     # update are necessary to not have to continually pull from the database during autocomplete.
     async with get_db_connection(bot.db_pool) as db:
         event_dict = await get_hosting_schedule(db)
         event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
-        await bot.add_cog(HostingSchedule(bot, event_list), guild=GUILD_ID)
+        await bot.add_cog(HostingSchedule(bot, event_list), guild=get_settings().server_id)

@@ -27,11 +27,6 @@ async def post_post_textfile(
     post_struct: list[dict]
     ):
     # Create the large string object for writing to file.
-    # post_text = hour_post[0] + "\n\n"
-    # for index, post in enumerate(go_posts):
-    #     post_text += post + "\n\n"
-    #     post_text += results_posts[index] + "\n\n"
-    # post_text += event_results_post[0]
     post_text = ""
     for index, post in enumerate(post_struct):
         post_text += post["post_text"]

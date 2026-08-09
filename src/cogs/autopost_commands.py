@@ -4,13 +4,12 @@ Module for Class PostScheduler.
 - Contains slash commands for viewing and cancelling scheduled posts.
 '''
 
-import os, time
 import discord
 from discord import app_commands
 from discord.ext import commands
 import asyncio
-from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from src.settings import get_settings
 from src.utils.hostpost_utils import discord_timestamp
 from src.utils.autoposts_utils import build_autopost_dict, clean_post
 from src.data.event_post_text import access_roles
@@ -19,7 +18,6 @@ from src.fzd_db import (
     get_db_connection, 
     get_scheduled_event_id, 
     get_event_scores,
-    get_user_id,
     get_event_host_id,
     get_host_info
 )
@@ -31,9 +29,9 @@ class PostScheduler(commands.Cog):
         self.scheduler = bot.scheduler
         self.interaction: discord.Interaction | None = None
 
-        load_dotenv()
-        self.validation_channel_id = discord.Object(id=int(os.getenv('VALIDATION_CHANNEL'))).id
-        self.announce_channel_id = discord.Object(id=int(os.getenv('EVENT_ANNOUNCE_CHANNEL'))).id
+        settings = get_settings()
+        self.validation_channel_id = settings.validation_channel
+        self.announce_channel_id = settings.event_announce_channel
 
 
     ''' Autocomplete methods '''
@@ -538,5 +536,4 @@ class PostScheduler(commands.Cog):
             self.push_job.autocomplete("job_name")(self.job_autocomplete)
 
 async def setup(bot: commands.Bot):
-    GUILD_ID=discord.Object(id=os.getenv('SERVER_ID'))
-    await bot.add_cog(PostScheduler(bot), guild=GUILD_ID)
+    await bot.add_cog(PostScheduler(bot), guild=get_settings().server_id)
