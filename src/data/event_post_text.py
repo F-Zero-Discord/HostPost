@@ -104,7 +104,8 @@ generated.\n"
 )
 
 help_text_2 = (
-"### /list_autopost_events\n> Lists the events that are currently queued for autoposting.\n\n\
+"## Event Management\n\
+### /list_autopost_events\n> Lists the events that are currently queued for autoposting.\n\n\
 ### /list_all_autoposts\n> Lists all queued automatic posts and their post times in \
 Coordinated Universal Time (UTC).\n\n\
 ### /cancel_event_posts\n> Allows the user to cancel all automatic posts for the scheduled events.\n\n\
@@ -116,6 +117,10 @@ and posts the prix results post in racetrack.\n\n\
 pending jobs for the event, and closes the event.\n\n\
 ### /push_job\n> Triggers any pending job, whether scheduled or paused. Shouldn’t need to be used \
 outside of testing.\n\n\
+## Hosting Management\n\
+### /hosting_schedule\n> List the schedule for the coming week and who is assigned to host.\n\n\
+### /update_host_for_event\n> Add or change who is listed as the host for an event.\n\n\
+### /remove_host_from_event\n> Remove who is listed as host for an event.\n\n\
 ### /help\n> Shows this message.\n\nIf you have any questions, suggestions, \
 or issues, please contact lurch."
 )
