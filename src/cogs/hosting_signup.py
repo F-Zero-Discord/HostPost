@@ -81,11 +81,11 @@ class HostingSchedule(commands.Cog):
             await message.edit(embed=schedule_board)
 
         except discord.NotFound:
-            await interaction.response.send_messsage("Error: The message or channel could not be found.")
+            await interaction.response.send_message("Error: The message or channel could not be found.")
         except discord.Forbidden:
-            await interaction.response.send_messsage("Error: The bot does not have permissions to edit or view this.")
+            await interaction.response.send_message("Error: The bot does not have permissions to edit or view this.")
         except discord.HTTPException as e:
-            await interaction.response.send_messsage(f"An error occurred: {e}")
+            await interaction.response.send_message(f"An error occurred: {e}")
 
     
     async def get_or_create_db_user(self, db, discord_user):
