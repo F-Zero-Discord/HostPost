@@ -117,8 +117,8 @@ class EventBuilder(commands.Cog):
 
     @app_commands.command(name="help", description="Information about the HostPost bot.")
     async def help(self, interaction: discord.Interaction):
-        await interaction.response.send_message(help_text_1, ephemeral=False)
-        await interaction.followup.send(help_text_2, ephemeral=False)
+        await interaction.response.send_message(help_text_1, ephemeral=True)
+        await interaction.followup.send(help_text_2, ephemeral=True)
     
     # Error handling for if user does not have appropriate role
     @event_setup.error
