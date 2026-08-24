@@ -4,3 +4,10 @@ __pycache__/
 requirements.txt
 hostbot.log
 notes.txt
+
+# Per-environment settings, copied over .env to switch (see CLAUDE.md)
+.env.dev
+.env.prod
+
+# Agent instructions, kept local
+CLAUDE.md
