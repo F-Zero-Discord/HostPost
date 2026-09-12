@@ -2,22 +2,9 @@
 Client for the FZD API (`api.fzd.gg`).
 
 The API holds the database credentials; this bot asks it questions instead of
-running SQL. Task 15-04 is the first command to go this way — `/update_host_for_event`
-and `/remove_host_from_event` — and `src/fzd_db.py` still serves the other
-eleven. The two coexist deliberately, and every command that moves is one fewer
-reason for a Raspberry Pi in someone's house to hold a MySQL password.
-
-Two things this module deliberately does not do:
-
-- **No fallback to a direct connection.** If the API is unreachable the command
-  fails, visibly, and says so. A fallback would put a second copy of the
-  identity policy back in this bot, which is the thing the port removes.
-- **No knowledge of `users.id`.** The API resolves a Discord account to a row
-  itself and returns nothing about it. That is why this is a port and not an
-  "ensure the user exists" endpoint.
+running SQL.
 """
 
-import asyncio
 import logging
 from typing import Any
 
@@ -52,7 +39,9 @@ class FzdApi:
     `__init__` so that constructing this needs no running event loop.
     """
 
-    def __init__(self, base_url: str, api_key: str, timeout_seconds: float = 10.0) -> None:
+    def __init__(
+        self, base_url: str, api_key: str, timeout_seconds: float = 10.0
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
@@ -64,8 +53,7 @@ class FzdApi:
 
         Both settings default to empty, so a bot that pulls this change without
         updating its `.env` keeps all thirteen commands loaded and fails only
-        these two, with an explanation. Making them required would take the whole
-        bot down over a staff command — see Plan 15's "if lurch's deploy slips".
+        these two, with an explanation.
         """
         return bool(self._base_url and self._api_key)
 
@@ -106,28 +94,38 @@ class FzdApi:
         """Leave a scheduled event with no host. Resolves nobody."""
         return await self._request("DELETE", f"/v1/events/{scheduled_event_id}/host")
 
-    async def _request(self, method: str, path: str, json: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def _request(
+        self, method: str, path: str, json: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         if not self.configured:
-            raise FzdApiNotConfigured("FZD_API_BASE_URL and FZD_API_KEY are not set in this bot's .env, so there is no API to call.")
+            raise FzdApiNotConfigured(
+                "FZD_API_BASE_URL and FZD_API_KEY are not set in this bot's .env, so there is no API to call."
+            )
 
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
 
         url = f"{self._base_url}{path}"
         try:
-            async with self._session.request(method, url, json=json, headers={API_KEY_HEADER: self._api_key}) as response:
+            async with self._session.request(
+                method, url, json=json, headers={API_KEY_HEADER: self._api_key}
+            ) as response:
                 body = await self._read_body(response)
                 if response.status >= 400:
                     raise FzdApiError(self._message_for(response.status, body))
                 return body
 
-        except asyncio.TimeoutError as error:
+        except TimeoutError as error:
             logger.error("[API] %s %s timed out", method, url)
-            raise FzdApiError("The FZD API did not answer in time. Nothing was changed.") from error
+            raise FzdApiError(
+                "The FZD API did not answer in time. Nothing was changed."
+            ) from error
 
         except aiohttp.ClientError as error:
             logger.error("[API] %s %s failed: %s", method, url, error)
-            raise FzdApiError(f"Could not reach the FZD API ({error}). Nothing was changed.") from error
+            raise FzdApiError(
+                f"Could not reach the FZD API ({error}). Nothing was changed."
+            ) from error
 
     @staticmethod
     async def _read_body(response: aiohttp.ClientResponse) -> dict[str, Any]:
