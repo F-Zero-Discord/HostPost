@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     db_host: str = "localhost"
     db_port: int = 3306
 
+    # The FZD API (`src/fzd_api.py`). Both default to empty and both are
+    # deliberately optional: the only commands that need them are
+    # /update_host_for_event and /remove_host_from_event, and a bot that pulls
+    # this change without editing its .env should lose those two with an
+    # explanation rather than refuse to start. Required settings would take all
+    # thirteen commands down over a staff command.
+    fzd_api_base_url: str = ""
+    fzd_api_key: SecretStr = SecretStr("")
+    fzd_api_timeout_seconds: float = 10.0
+
     log_level: str = "INFO"
 
     event_announce_channel: int | None

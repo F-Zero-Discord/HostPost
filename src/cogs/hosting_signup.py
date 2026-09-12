@@ -3,19 +3,22 @@ Contains slash commands and associated views to allow users to view which events
 sign up for events.
 """
 from datetime import datetime, UTC
+import logging
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 from src.settings import get_settings
-from src.fzd_db import (get_db_connection, 
-                        get_hosting_schedule, 
-                        add_new_user, 
-                        get_user_id, 
-                        update_host_in_db,
-                        remove_host_from_event_db
-                    )
+from src.fzd_api import FzdApiError
+from src.fzd_db import get_db_connection, get_hosting_schedule
 from src.data.event_post_text import access_roles
 from src.utils.hostpost_utils import discord_timestamp
+
+logger = logging.getLogger(__name__)
+
+TAG_MAX_LENGTH = 10
+"""`users.tag` is `varchar(10)`, matching F-Zero 99's in-game name limit. The API
+rejects a longer one rather than truncating it, so the trim happens here."""
 
 
 class HostingSchedule(commands.Cog):
@@ -66,6 +69,24 @@ class HostingSchedule(commands.Cog):
         return schedule_board
 
 
+    @staticmethod
+    async def respond(interaction: discord.Interaction, content: str, *, ephemeral: bool = False) -> None:
+        """ Replies whether or not the interaction has already been deferred.
+
+            The two host commands defer before calling the API — an HTTP hop from a
+            Raspberry Pi to the VPS plus a board refresh can outrun Discord's
+            three-second window, and a missed window shows the host "The
+            application did not respond" while the write has in fact happened.
+            After a defer the only way to answer is a followup, so anything that
+            can be reached from both paths has to go through here. Same shape
+            `main.HostBot.on_app_command_error` already uses.
+        """
+        if interaction.response.is_done():
+            await interaction.followup.send(content, ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(content, ephemeral=ephemeral)
+
+
     async def update_live_board(self, interaction: discord.Interaction, event_dict: list[dict]):
         """
         """
@@ -81,23 +102,42 @@ class HostingSchedule(commands.Cog):
             await message.edit(embed=schedule_board)
 
         except discord.NotFound:
-            await interaction.response.send_message("Error: The message or channel could not be found.")
+            await self.respond(interaction, "Error: The message or channel could not be found.")
         except discord.Forbidden:
-            await interaction.response.send_message("Error: The bot does not have permissions to edit or view this.")
+            await self.respond(interaction, "Error: The bot does not have permissions to edit or view this.")
         except discord.HTTPException as e:
-            await interaction.response.send_message(f"An error occurred: {e}")
+            await self.respond(interaction, f"An error occurred: {e}")
 
-    
-    async def get_or_create_db_user(self, db, discord_user):
-        """ Gets the user id from the database given a discord user. If the user is not in the database, creates a new user and returns the id.
+
+    async def resolve_event(self, interaction: discord.Interaction, event: str) -> dict | None:
+        """ Finds the scheduled event the host named, refreshing the autocomplete list on the way.
+
+        Replies and returns None if there is nothing to act on, so a caller can
+        `if event_info is None: return`. The schedule read is still this bot's own
+        SQL — the hosting schedule belongs to Plan 10, not to this port.
         """
-        db_user_id = await get_user_id(db, discord_user.name)
-        if db_user_id is None:
-            await add_new_user(db, discord_user, display_name=discord_user.nick[0:10])
-            db_user_id = await get_user_id(db, discord_user.name)
-            if db_user_id is None:
-                raise TypeError(f"Could not add new user {discord_user}")
-        return db_user_id
+        async with get_db_connection(self.bot.db_pool) as db:
+            event_dict = await get_hosting_schedule(db)
+        # Create event list for autocomplete
+        self.event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
+
+        if not event_dict:
+            await self.respond(interaction, "No events are currently scheduled.", ephemeral=True)
+            return None
+
+        event_info = next((e for e in event_dict if e.get('event_name') == event), None)
+        if event_info is None:
+            await self.respond(interaction, f"Event {event} not found.", ephemeral=True)
+            return None
+        return event_info
+
+
+    async def refresh_live_board(self, interaction: discord.Interaction) -> None:
+        """ Re-reads the schedule and edits the anchor message to match.
+        """
+        async with get_db_connection(self.bot.db_pool) as db:
+            event_dict = await get_hosting_schedule(db)
+        await self.update_live_board(interaction, event_dict)
 
 
     ''' Slash Commands '''
@@ -125,72 +165,69 @@ class HostingSchedule(commands.Cog):
     @app_commands.command(name="update_host_for_event", description="Add or modify a host to a scheduled event")
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def update_host_for_event(self, interaction: discord.Interaction, event: str, host: discord.Member):
+        """ Assigns a host to a scheduled event, through the FZD API (task 15-04).
+
+            The API resolves the Discord account to a row in `users` and writes
+            `events_scheduled.host_id` itself. This command sends a snowflake and a
+            username and holds no database id of its own — which is the whole point
+            of the port: the "which row is this person" rule lives in one place,
+            and it is not here.
+        """
+        event_info = await self.resolve_event(interaction, event)
+        if event_info is None:
+            return
+
+        # Deferred here rather than at the top of the command so the two
+        # "nothing to do" replies above stay ephemeral: Discord ignores
+        # `ephemeral` on the first followup after a public defer.
+        await interaction.response.defer()
+
         try:
-            async with get_db_connection(self.bot.db_pool) as db:
-                event_dict = await get_hosting_schedule(db)
-            # Create event list for autocomplete
-            self.event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
+            await self.bot.api.assign_host(
+                int(event_info['event_id']),
+                # `host.id` is the immutable snowflake and `host.name` the mutable
+                # username. Both come off the same interaction, which is what makes
+                # this bot's pairing of the two authoritative.
+                discord_user_id=host.id,
+                discord_user_name=host.name,
+                # Only used if this account has no row yet. `display_name` is the
+                # nickname, the global name or the username, in that order, and is
+                # never None — unlike `host.nick`, which was indexed directly here
+                # and raised TypeError for any host without a server nickname.
+                tag=host.display_name[:TAG_MAX_LENGTH],
+            )
+        except FzdApiError as error:
+            logger.error("update_host_for_event failed for event=%s host=%s: %s", event, host, error)
+            await self.respond(interaction, f"Could not set the host for {event}. {error}")
+            return
 
-            if not event_dict:
-                await interaction.response.send_message("No events are currently scheduled.", ephemeral=True)
-                return
-            if not event in [e['event_name'] for e in event_dict if 'event_name' in e]:
-                await interaction.response.send_message(f"Event {event} not found.", ephemeral=True)
-                return
-            
-            # Get event dictionary based on user input to get the event_id for database update
-            event_info = next((e for e in event_dict if e['event_name'] == event), None)
-            if event_info == None:
-                await interaction.response.send_message(f"Event {event} not found.", ephemeral=True)
-                return
-            
-            # Updated host in database
-            # Get user id first, or add user if not registered in database
-            async with get_db_connection(self.bot.db_pool) as db:
-                db_user_id = await self.get_or_create_db_user(db, host)
-                await update_host_in_db(db, event_info['event_id'], db_user_id)
-                event_dict = await get_hosting_schedule(db)
-                await self.update_live_board(interaction, event_dict)
-            await interaction.response.send_message(f"Host for {event} updated to {host.display_name}.", ephemeral=False)                
-
-        except Exception as e:
-            print(f"Error occurred while fetching hosting schedule: {e}")
-            await interaction.response.send_message("An error occurred while fetching the hosting schedule.", ephemeral=True)
+        await self.refresh_live_board(interaction)
+        await self.respond(interaction, f"Host for {event} updated to {host.display_name}.")
 
 
     @app_commands.command(name="remove_host_from_event", description="Remove the host from a scheduled event")
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def remove_host_from_event(self, interaction: discord.Interaction, event: str):
+        """ Leaves a scheduled event with no host, through the FZD API (task 15-04).
+
+            The other half of the same command. It resolves nobody — removing a host
+            needs no identity at all.
+        """
+        event_info = await self.resolve_event(interaction, event)
+        if event_info is None:
+            return
+
+        await interaction.response.defer()
+
         try:
-            async with get_db_connection(self.bot.db_pool) as db:
-                event_dict = await get_hosting_schedule(db)
-            # Create event list for autocomplete
-            self.event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
+            await self.bot.api.remove_host(int(event_info['event_id']))
+        except FzdApiError as error:
+            logger.error("remove_host_from_event failed for event=%s: %s", event, error)
+            await self.respond(interaction, f"Could not remove the host from {event}. {error}")
+            return
 
-            if not event_dict:
-                await interaction.response.send_message("No events are currently scheduled.", ephemeral=True)
-                return
-            if not event in [e['event_name'] for e in event_dict if 'event_name' in e]:
-                await interaction.response.send_message(f"Event {event} not found.", ephemeral=True)
-                return
-            
-            # Get event dictionary based on user input to get the event_id for database update
-            event_info = next((e for e in event_dict if e['event_name'] == event), None)
-            if event_info == None:
-                await interaction.response.send_message(f"Event {event} not found.", ephemeral=True)
-                return
-            
-            # Updated host in database to None
-            print(f'Scheduled event id: {event_info['event_id']}')
-            async with get_db_connection(self.bot.db_pool) as db:
-                await remove_host_from_event_db(db, event_info['event_id'])
-                event_dict = await get_hosting_schedule(db)
-                await self.update_live_board(interaction, event_dict)
-            await interaction.response.send_message(f"{event} updated to have no host.", ephemeral=False)                    
-
-        except Exception as e:
-            print(f"Error occurred while fetching hosting schedule: {e}")
-            await interaction.response.send_message("An error occurred while fetching the hosting schedule.", ephemeral=True)
+        await self.refresh_live_board(interaction)
+        await self.respond(interaction, f"{event} updated to have no host.")
 
 
     # @app_commands.command(name="anchor_post", description="create anchor post")

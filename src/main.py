@@ -11,6 +11,7 @@ import logging
 from src.error_alerts import send_error_alert
 from src.settings import configure_logging, get_settings
 
+from src.fzd_api import FzdApi
 from src.fzd_db import init_db_pool, get_db_connection, check_db_for_hosting_support
 from src.utils.scheduler import init_scheduler
 
@@ -63,6 +64,18 @@ class HostBot(commands.Bot):
         try:
             self.db_pool = await init_db_pool()
             self.scheduler = await init_scheduler()
+            # The FZD API. Built unconditionally: when it is not configured the
+            # two commands that use it say so, and the other eleven never ask.
+            self.api = FzdApi(
+                base_url=settings.fzd_api_base_url,
+                api_key=settings.fzd_api_key.get_secret_value(),
+                timeout_seconds=settings.fzd_api_timeout_seconds,
+            )
+            if not self.api.configured:
+                logger.warning(
+                    "FZD_API_BASE_URL / FZD_API_KEY are not set: /update_host_for_event "
+                    "and /remove_host_from_event will refuse until they are."
+                )
             await self.load_extension("src.cogs.autopost_commands")
             await self.load_extension("src.cogs.hostpost_commands")
             # Check to see if database configured to allow for hosting support. Only load cog if True.
@@ -92,6 +105,18 @@ class HostBot(commands.Bot):
                 error=error,
                 details={"guild_id": settings.server_id},
             )
+
+
+    async def close(self) -> None:
+        """Shut the API session down with the bot.
+
+        An unclosed `aiohttp.ClientSession` logs a warning on interpreter exit
+        and is one of the few things in this bot that leaks across a restart.
+        """
+        api = getattr(self, "api", None)
+        if api is not None:
+            await api.close()
+        await super().close()
 
 
     async def on_ready(self) -> None:

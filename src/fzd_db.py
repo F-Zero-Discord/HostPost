@@ -116,32 +116,19 @@ async def execute_query(conn, query, params=None, fetch="all", isProc:bool = Fal
             logger.error(f"[DB QUERY ERROR]: {e}\nQuery: {query}\nParams: {params}")
             raise
 
-async def get_user_id(db, discord_id: str):
-    """ Given a discord user id (discord_id), returns the database
-        id of that user
-    """
-    sql_getuser = "SELECT id from users WHERE discord_user_id = %s"
-    user = await execute_query(db, sql_getuser, params=(discord_id,),  fetch="one")
-    if user:
-        return user['id']
-    else:
-        return None
-
-async def add_new_user(db, discord_username, display_name=None) -> None:
-    """ Adds new user to the database
-    """ 
-    
-    # Assuming "discord_display_name" isn't required 
-    sql_newuser="INSERT INTO users (tag, discord_user_id) VALUES (%s, %s);"
-
-    if display_name is None: # Defaults to user's server display name 
-        display_name = discord_username.nick[0:10]
-    await execute_query(db, sql_newuser, params=(display_name, discord_username.name), fetch=None)
-
-
 ############################################
 # ^ Above are Nightmare-Bot functions
 ############################################
+#
+# `get_user_id` and `add_new_user` used to live here, copied from fzd-bot. They
+# were HostPost's only write path against `users`, and task 15-04 deleted them:
+# the FZD API resolves a Discord account to a row now, and this bot never learns
+# the `users.id` that comes back. See `src/fzd_api.py`.
+#
+# They also carried the bug this plan exists to fix. `get_user_id` matched on a
+# column named `discord_user_id` that held a *username*, so a host who renamed
+# their Discord account missed and got a second row. Nothing here should reach
+# for `users` by name again.
 
 
 ############################################
@@ -171,7 +158,7 @@ async def get_event_scores(db, scheduled_event_id):
     """
     sql_event_scores = """SELECT users.tag AS name,
                                 CAST(r.user_id AS CHAR) AS user_id,
-                                users.discord_user_id AS discord_name,
+                                users.discord_user_name AS discord_name,
                                 CAST(SUM(r.score) AS CHAR) AS score
                             FROM event_result_points r
                             INNER JOIN users ON r.user_id = users.id
@@ -208,39 +195,23 @@ async def get_hosting_schedule(db):
     return await execute_query(db, sql_host_schedule, params=params, fetch="all", isProc=False)
 
 
-async def update_host_in_db(db, scheduled_event_id, host_user_id):
-    """ Updates the host column for the given scheduled event
-    """
-    sql_update_host = """UPDATE events_scheduled
-                        SET host_id = CAST(%s AS SIGNED)
-                        WHERE id = CAST(%s AS SIGNED)
-                    """
-    params = (host_user_id, scheduled_event_id)
-    await execute_query(db, sql_update_host, params=params, fetch=None)
-
-
-async def remove_host_from_event_db(db, scheduled_event_id):
-    """ Sets the host_id column in events_scheduled to NULL for a given scheduled event.
-    """
-    sql_remove_host = """UPDATE events_scheduled
-                        SET host_id = NULL
-                        WHERE id = CAST(%s AS SIGNED)
-                    """
-    params = (scheduled_event_id,)
-    await execute_query(db, sql_remove_host, params=params, fetch=None)
+# `update_host_in_db` and `remove_host_from_event_db` were here. Task 15-04
+# replaced them with PUT and DELETE /v1/events/{id}/host: writing
+# `events_scheduled.host_id` needs a `users.id`, and holding one is exactly what
+# this bot stopped doing.
 
 
 async def get_event_host_id(db, scheduled_event_id: int) -> int | None:
     """ Returns user id of a host if one assigned to scheduled event.
         Otherwise returns None.
     """
-    sql_get_user_id = """
+    sql_get_host_id = """
                         SELECT host_id
                         FROM events_scheduled
                         WHERE id = %s
                     """
     params = (scheduled_event_id,)
-    host_id = await execute_query(db, sql_get_user_id, params=params, fetch="one", isProc=False)
+    host_id = await execute_query(db, sql_get_host_id, params=params, fetch="one", isProc=False)
     if host_id:
         return host_id["host_id"]
     else:
