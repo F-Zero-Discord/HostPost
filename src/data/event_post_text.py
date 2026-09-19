@@ -26,7 +26,9 @@ prix_info = [
     {"shortname": "miniprix", "fullname": "Mini Prix", "emoji": "<:MPMini:1195076264294363187>", "mirror_emoji": "", "tickets": 1, "mode": "99"},
     {"shortname": "glitchgp", "fullname": "Glitch GP", "emoji": "<:GPSecretKnight:1462611891447791700>", "mirror_emoji": "", "tickets": 3, "mode": "99"},
     {"shortname": "worldtour", "fullname": "World Tour", "emoji": "<:WTMini:1462608159913934881>", "mirror_emoji": "", "tickets": 0, "mode": "99"},
-    {"shortname": "miniwt", "fullname": "Mini World Tour", "emoji": "<:WTMini:1462608159913934881>", "mirror_emoji": "", "tickets": 0, "mode": "99"}
+    {"shortname": "miniwt", "fullname": "Mini World Tour", "emoji": "<:WTMini:1462608159913934881>", "mirror_emoji": "", "tickets": 0, "mode": "99"},
+    # A single 99 race. No emoji is assigned to it yet.
+    {"shortname": "race99", "fullname": "99 Race", "emoji": "", "mirror_emoji": "", "tickets": 0, "mode": "99"}
 ]
 
 schedule_line = {
@@ -74,30 +76,18 @@ custom_text = [
 
 clean_driving_list = ["miniwt", "worldtour"]
 
-time_offset_options = {
-    "no offset": 0,
-    "15 minutes": 15,
-    "20 minutes": 20,
-    "30 minutes": 30,
-    "40 minutes": 40,
-    "60 minutes": 60
-}
-
 help_text_1 = (
     "## HostPost Help\n\
 This bot assists hosts of weekly FZD events in creating and posting event announcements, \
 prix opening posts, and event results posts. It also has an autoposting feature that can \
 automatically post the announcement and prix opening posts at the scheduled times.\n\n\
-**Note:** There currently is no PengBot support for importing prix and times, so the user \
-will need to look them up first. Also, that means there is no support for mini prix lineups \
-in the posts.\n\n\
-### /event_setup\n> This command starts the interactive process for creating \
-event posts. The bot will ask you to select the prix and time offsets for each prix in your \
-event. The time offset can be done in 'Simple' mode, where standard time offsets are provided, \
-or in 'Custom' mode, where you can specify times to the minute. The time offset for the first \
-prix is usually 0 or 'no offset', but could be adjusted if your starting prix does not start \
-exactly on the hour. Once complete, your will be asked if you want the bot to automatically \
-post the announcement and prix opening posts at the scheduled times in \
+### /event_setup\n> Pick an event from the calendar. The bot asks for the scoring (points or \
+time, mulligans), whether the evening is prix or single races and whether lobbies are public, \
+private or chosen per slot, and when the first slot starts. It then offers what the game runs \
+at those minutes — leagues, Mini Prix sets, 99 race pairs — or, for a private prix, the eight \
+leagues and the Mini Prix. Confirm writes the scoring and the schedule to the FZD database \
+through the API; the scoreboard reads the same slots. Then you are asked if you want the bot to \
+automatically post the announcement and prix opening posts at the scheduled times in \
 https://discordapp.com/channels/1019374132342816800/1244994645155385404 and \
 https://discordapp.com/channels/1019374132342816800/1185690454658912397. Posts are then \
 generated.\n"

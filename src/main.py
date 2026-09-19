@@ -1,18 +1,17 @@
 # This is the event_helper bot, developed to assist hosts in developing posts.
 
-import os
+import argparse
+import logging
 import sys
 
 import discord
 from discord import app_commands
 from discord.ext import commands
-import logging
 
 from src.error_alerts import send_error_alert
-from src.settings import configure_logging, get_settings
-
 from src.fzd_api import FzdApi
-from src.fzd_db import init_db_pool, get_db_connection, check_db_for_hosting_support
+from src.fzd_db import check_db_for_hosting_support, get_db_connection, init_db_pool
+from src.settings import configure_logging, get_settings, use_env
 from src.utils.scheduler import init_scheduler
 
 logger = logging.getLogger(__name__)
@@ -65,7 +64,7 @@ class HostBot(commands.Bot):
             self.db_pool = await init_db_pool()
             self.scheduler = await init_scheduler()
             # The FZD API. Built unconditionally: when it is not configured the
-            # two commands that use it say so, and the other eleven never ask.
+            # three commands that use it say so, and the others never ask.
             self.api = FzdApi(
                 base_url=settings.fzd_api_base_url,
                 api_key=settings.fzd_api_key.get_secret_value(),
@@ -73,8 +72,8 @@ class HostBot(commands.Bot):
             )
             if not self.api.configured:
                 logger.warning(
-                    "FZD_API_BASE_URL / FZD_API_KEY are not set: /update_host_for_event "
-                    "and /remove_host_from_event will refuse until they are."
+                    "FZD_API_BASE_URL / FZD_API_KEY are not set: /event_setup, "
+                    "/update_host_for_event and /remove_host_from_event will refuse until they are."
                 )
             await self.load_extension("src.cogs.autopost_commands")
             await self.load_extension("src.cogs.hostpost_commands")
@@ -141,6 +140,15 @@ class HostBot(commands.Bot):
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(prog="hostpost")
+    parser.add_argument("--env", metavar="NAME", help="read settings from .env.NAME instead of .env")
+    args = parser.parse_args()
+    if args.env:
+        try:
+            use_env(args.env)
+        except FileNotFoundError as error:
+            parser.error(str(error))
+
     settings = get_settings()
     configure_logging()
     intents = discord.Intents.default()

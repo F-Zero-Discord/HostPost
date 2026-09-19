@@ -88,17 +88,24 @@ class HostingSchedule(commands.Cog):
 
 
     async def update_live_board(self, interaction: discord.Interaction, event_dict: list[dict]):
+        """ Edits the anchor message to show `event_dict`.
         """
-        """
+        channel_id = get_settings().hosting_schedule_channel
+        message_id = get_settings().hosting_schedule_message_id
+        if channel_id is None or message_id is None:
+            await self.respond(
+                interaction,
+                "The hosting schedule board is not configured (HOSTING_SCHEDULE_CHANNEL / HOSTING_SCHEDULE_MESSAGE_ID), so it was not updated.",
+            )
+            return
         try:
-            channel_id = get_settings().hosting_schedule_channel
             schedule_board = self.build_schedule_embed(event_dict)
             channel = self.bot.get_channel(channel_id)
             if channel is None:
                 # Fallback if the channel is not in the bot's internal cache
                 channel = await self.bot.fetch_channel(channel_id)
             
-            message = await channel.fetch_message(get_settings().hosting_schedule_message_id)
+            message = await channel.fetch_message(message_id)
             await message.edit(embed=schedule_board)
 
         except discord.NotFound:

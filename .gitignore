@@ -5,10 +5,9 @@ requirements.txt
 hostbot.log
 notes.txt
 
-# Per-environment settings, copied over .env to switch (see CLAUDE.md)
-.env.dev
-.env.stage
-.env.prod
+# Per-environment settings, read with `hostpost --env NAME` (see AGENTS.md)
+.env*
+!.env.example
 
 # Backups of the above. Same secrets, so the same rule.
 .env*.bak

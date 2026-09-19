@@ -12,20 +12,20 @@ from src.utils.hostpost_utils import discord_timestamp, round_to_30_minutes
 from src.data.template_mapping import TemplateMap
 from src.data.event_post_text import prix_info, schedule_line, events, custom_text, clean_driving_list
 from src.fzd_db import (
-    get_scheduled_event_id,
     get_event_host_id,
-    get_db_connection, 
+    get_db_connection,
     get_post_template
 )
 
-async def build_posts(bot, event_name: str, 
-                      scheduled_event_name: str, 
+async def build_posts(bot, event_name: str,
+                      scheduled_event_id: int,
                       prix_list: list[dict[str, any]]):
-    # Format of prix_list:
+    # Format of prix_list (see data/slot_mapping.py, which builds it from the API's slots):
     #   [
-    #   {name: value (str)
+    #   {prix: value (str, a prix_info shortname)
     #   time: value (datetime)
-    #   prix_type: value (str, e.g. "public" or "private")}
+    #   prix_type: value (str, e.g. "public" or "private")
+    #   lineup: value (list[str] of track names, empty unless the post prints them)}
     #   ...
     #   ]
 
@@ -65,7 +65,6 @@ async def build_posts(bot, event_name: str,
 
     # Build 1hr, 10 min, and Results posts
     async with get_db_connection(bot.db_pool) as db:
-        scheduled_event_id = await get_scheduled_event_id(db, scheduled_event_name)
         host_id = await get_event_host_id(db, scheduled_event_id)
         # custom_message = await check_for_custom_message(db, event_name, post_type, host_id)
         hour_template =  await get_post_template(db, event_name, "one_hour", host_id)
@@ -119,7 +118,7 @@ def build_schedule(prix_list: list[dict[str, any]]) -> str:
     schedule_text = ""
     for prix in prix_list:
         prix_dict = next((item for item in prix_info if item["shortname"] == prix["prix"]), None)
-        if prix["prix"] == "classicprix" and prix["lineup"]:
+        if prix["lineup"]:
             schedule_text += schedule_line["private_mp_lineup"].format(
                     discord_timestamp(prix["time"], "short"), prix["lineup"][0].upper(), prix["lineup"][1].upper(), prix["lineup"][2].upper())
         else:
@@ -164,7 +163,7 @@ def build_gp_posts(event_name: str, prix_list: list[dict[str, any]]) -> list[str
             role_ping = "<@&1197169889417371689>" # "@Events" role 
 
         # Build prix start post
-        if prix["prix"] == 'classicprix' and prix["lineup"]:
+        if prix["lineup"]:
             go_posts.append(f"Prix #{prix_list.index(prix) + 1}```{role_ping}\n# {event_name} <:Private:1227046530721251479> Private {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']} starts NOW! <:GO:1226991337723662497>\n## {prix['lineup'][0].upper()} > {prix['lineup'][1].upper()} > {prix['lineup'][2].upper()}\n## <:Private:1227046530721251479> Passcode: {str(random.randint(0,9999)).zfill(4)} <:Private:1227046530721251479>```")
         else:
             match prix["prix_type"]:

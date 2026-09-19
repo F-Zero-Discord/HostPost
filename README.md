@@ -14,7 +14,13 @@ HostPost provides the following features:
 
 ### /event_setup
 
-This command starts the interactive process for creating event posts. The bot will ask you to select the prix and time offsets for each prix in your event. The time offset can be done in 'Simple' mode, where standard time offsets are provided, or in 'Custom' mode, where you can specify times to the minute. The time offset for the first prix is usually 0 or 'no offset', but could be adjusted if your starting prix does not start exactly on the hour. Once complete, your will be asked if you want the bot to automatically post the announcement and prix opening posts at the scheduled times in ⁠F-Zero Discord⁠fzd-events and ⁠F-Zero Discord⁠f-zero99-racetrack. Posts are then generated.
+`/event_setup <event>`. The event autocompletes from the FZD API's calendar of upcoming scheduled events. The wizard is one ephemeral message, edited page by page, that only the person who ran the command can drive; nothing is written until Confirm, and it times out after about fifteen minutes.
+
+1. **Configuration.** Scoring (points or time; a time event also takes a maximum loss in seconds), mulligans, whether the evening is prix or single races and whether its lobbies are all public, all private or chosen per slot, and the first slot's time (offsets around the scheduled start, or an exact HH:MM UTC). A first slot outside the scheduled window is allowed with a warning.
+2. **Slots.** For an all-public prix evening, one toggle button per prix for the next six the game runs from the first slot, each with its time, emoji and name as the rotation names it; green is in. Otherwise one slot per page: the lobby (when mixed), the time as an offset from the previous slot, and then what the game offers a public lobby at that minute, or for a private prix the two Mini Prix and the eight leagues. Single races offer the ten 99 pairs from the chosen minute, and the next slot defaults to five minutes after the pick.
+3. **Confirm.** Writes the scoring and then the schedule through the API, which resolves each public league and Mini Prix set; the wizard shows what was written. If the event already had slots the wizard says so first and offers to replace them; the API refuses once a result has been recorded.
+
+Then, as before, you are asked whether the bot should post the announcement and prix opening posts automatically and whether to validate results, and the posts are generated from the committed schedule.
 
 ### /list_autopost_events
 
@@ -66,7 +72,7 @@ Shows this message.
 
 The three hosting commands are only available when the database supports host assignment; see Architecture below.
 
-`/update_host_for_event` and `/remove_host_from_event` go through the FZD API rather than writing to the database directly, so they need `FZD_API_BASE_URL` and `FZD_API_KEY` in `.env` (see `.env.example`). Without them those two commands reply that the API is not configured; every other command is unaffected.
+`/event_setup`, `/update_host_for_event` and `/remove_host_from_event` go through the FZD API rather than the database directly, so they need `FZD_API_BASE_URL` and `FZD_API_KEY` in `.env` (see `.env.example`). Without them those three commands reply that the API is not configured; every other command is unaffected.
 
 ## Access
 
@@ -98,6 +104,17 @@ HostPost accesses these channel ids from a .env file:
 
 All of the above are required with no default, so the bot will not start until each is present in .env.
 
+## Running
+
+```bash
+uv sync
+uv run hostpost                       # reads .env
+uv run hostpost --env stage           # reads .env.stage: local bot against api-stage.fzd.gg / fzd_stage
+uv run hostpost --env stage-local-api # reads .env.stage-local-api: local bot against a local fzd-api over fzd_stage
+```
+
+`--env NAME` reads `.env.NAME` instead of `.env`, not on top of it. `.env.example` lists every setting and the variants in use; every `.env*` but `.env.example` is gitignored.
+
 ## Testing
 
 The .env file has a TEST_FLAG. When set to 1, the time of each automatic post is overridden, and each is posted 30 seconds after the previous.Additionally, in test mode the pings to @Events and @Classic Events are also overridden so that they won’t activate.
@@ -112,5 +129,5 @@ In the Discord Developer Portal, the bot must be provided both messaging and gui
 
 Several user interactions are not completely handled:
 
-- When selecting prix times for an event, Custom mode allows free text of any number, positive or negative. In the future perhaps restrict to +/- 60 minutes.
 - Autocomplete is doing a lot of the heavy lifting as to what commands can do what to what jobs.
+- A single-race (99) event produces posts, but the 99 race has no emoji assigned in `event_post_text.prix_info` and the templates were written for prix.
