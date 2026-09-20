@@ -53,6 +53,8 @@ KIND_AND_LOBBIES = (
 )
 KIND_LABELS = {value: label for label, value in KIND_AND_LOBBIES}
 
+MACHINE_MASTERY_RULE = "Machine Mastery: each machine's score counts once; a repeated machine keeps its best."
+
 
 @dataclass
 class SlotDraft:
@@ -144,6 +146,22 @@ class MaxLossModal(discord.ui.Modal, title="Maximum time loss"):
         await self.wizard.show(interaction)
 
 
+class MulligansModal(discord.ui.Modal, title="Mulligans"):
+    count_input = discord.ui.TextInput(label="Results dropped before totalling", placeholder="1", max_length=3)
+
+    def __init__(self, wizard: "EventSetupView") -> None:
+        super().__init__()
+        self.wizard = wizard
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        count = self.count_input.value.strip()
+        if not count.isdecimal():
+            await interaction.response.send_message("Enter the mulligans as a whole number, 0 or more.", ephemeral=True)
+            return
+        self.wizard.mulligans = int(count)
+        await self.wizard.show(interaction)
+
+
 class EventSetupView(discord.ui.View):
     """Pages: `replace` (only when the event already has slots), `config`,
     then `public_prix` or one `slot` page per slot, `review`, and after Confirm
@@ -171,6 +189,7 @@ class EventSetupView(discord.ui.View):
         self.scoring: str | None = detail["scoring_method"] if detail["scoring_method"] in ("points", "time") else None
         self.mulligans: int = detail["scoring"]["num_mulligans"]
         self.max_time_loss_cs: int | None = detail["scoring"]["max_time_loss_cs"]
+        self.machine_mastery: bool = detail["scoring"]["machine_counts_once"]
         self.kind: str | None = None
         self.lobbies: str | None = None
         self.first_start: datetime | None = None
@@ -271,8 +290,9 @@ class EventSetupView(discord.ui.View):
         style: discord.ButtonStyle = discord.ButtonStyle.secondary,
         row: int = 4,
         emoji: discord.Emoji | None = None,
+        disabled: bool = False,
     ) -> None:
-        button = discord.ui.Button(label=label, style=style, row=row, emoji=emoji)
+        button = discord.ui.Button(label=label, style=style, row=row, emoji=emoji, disabled=disabled)
         button.callback = handler
         self.add_item(button)
 
@@ -289,12 +309,14 @@ class EventSetupView(discord.ui.View):
         return f"## {self.event_name}, scheduled {discord_timestamp(self.starts_at, 'long')}"
 
     def scoring_line(self) -> str:
+        if not self.scoring:
+            return "Scoring: not chosen"
+        parts = [self.scoring]
         if self.scoring == "time":
             cap = f"{self.max_time_loss_cs / 100:.2f} s" if self.max_time_loss_cs else "not set"
-            return f"Scoring: time, maximum loss {cap}, {self.mulligans} mulligan(s)"
-        if self.scoring == "points":
-            return f"Scoring: points, {self.mulligans} mulligan(s)"
-        return "Scoring: not chosen"
+            parts.append(f"maximum loss {cap}")
+        parts.append("Machine Mastery" if self.machine_mastery else f"{self.mulligans} mulligan(s)")
+        return "Scoring: " + ", ".join(parts)
 
     # --- rendering --------------------------------------------------------
 
@@ -330,6 +352,8 @@ class EventSetupView(discord.ui.View):
 
     def content_config(self) -> str:
         lines = [self.header(), self.scoring_line()]
+        if self.machine_mastery:
+            lines.append(MACHINE_MASTERY_RULE)
         if self.kind:
             lines.append(f"Event: {KIND_LABELS[f'{self.kind}:{self.lobbies}']}")
         if self.first_start:
@@ -354,12 +378,11 @@ class EventSetupView(discord.ui.View):
             self.on_kind,
             row=1,
         )
-        self.add_select(
-            "Mulligans",
-            self.options([(f"{n} mulligan(s)", str(n)) for n in range(4)], {str(self.mulligans)}),
-            self.on_mulligans,
-            row=2,
-        )
+        # Discord has no checkbox outside a modal, so the rule is a button whose
+        # label carries its state. Mulligans and the rule exclude each other on
+        # this page: `on_machine_mastery` zeroes them and this locks the button.
+        self.add_button("Mulligans", self.on_mulligans, row=2, disabled=self.machine_mastery)
+        self.add_button(f"{'☑' if self.machine_mastery else '☐'} Machine Mastery", self.on_machine_mastery, row=2)
         chosen = self.first_start.isoformat() if self.first_start else ""
         self.add_select(
             "First slot time",
@@ -389,8 +412,13 @@ class EventSetupView(discord.ui.View):
         self.kind, self.lobbies = values[0].split(":")
         await self.show(interaction)
 
-    async def on_mulligans(self, interaction: discord.Interaction, values: list[str]) -> None:
-        self.mulligans = int(values[0])
+    async def on_mulligans(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(MulligansModal(self))
+
+    async def on_machine_mastery(self, interaction: discord.Interaction) -> None:
+        self.machine_mastery = not self.machine_mastery
+        if self.machine_mastery:
+            self.mulligans = 0
         await self.show(interaction)
 
     async def on_first_start(self, interaction: discord.Interaction, values: list[str]) -> None:
@@ -663,6 +691,7 @@ class EventSetupView(discord.ui.View):
                 scoring_method=self.scoring,
                 num_mulligans=self.mulligans,
                 max_time_loss_cs=self.max_time_loss_cs if self.scoring == "time" else None,
+                machine_counts_once=self.machine_mastery,
             )
         except FzdApiError as error:
             await self.finish(interaction, f"Nothing was written. {error}")

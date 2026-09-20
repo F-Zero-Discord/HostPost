@@ -100,9 +100,12 @@ class FzdApi:
         scoring_method: str,
         num_mulligans: int,
         max_time_loss_cs: int | None,
+        machine_counts_once: bool,
     ) -> dict[str, Any]:
         """Set how the event is scored. `max_time_loss_cs` is required under
-        `time` and must be None under `points`; the API refuses a mismatch."""
+        `time` and must be None under `points`, and `machine_counts_once` is
+        refused under `time` or without the machine requirement; the API
+        refuses a mismatch."""
         return await self._request(
             "PUT",
             f"/v1/events/{scheduled_event_id}/scoring",
@@ -110,6 +113,7 @@ class FzdApi:
                 "scoring_method": scoring_method,
                 "num_mulligans": num_mulligans,
                 "max_time_loss_cs": max_time_loss_cs,
+                "machine_counts_once": machine_counts_once,
             },
         )
 

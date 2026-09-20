@@ -18,18 +18,44 @@ to contribute to" against "harder to break", choose the one that can be contribu
 question a review asks is "could the maintainer of this bot land this change?", ahead of "is this
 maximally correct?".
 
-**The governing principle is simplicity.** This is a low-throughput hobby bot: a handful of
-scheduled posts per event. Code should be as simple as possible while doing what it has to. Do not
-add an abstraction, safeguard or pattern unless there is a clear, present need — not a hypothetical
-future one. Do not add a step unless it is obviously needed. Prefer readable code over code that
-guards against concurrency or edge cases that this scale makes negligible.
+**Contributor experience is measured at read time.** The maintainer opens this repo cold, months
+after the last change, to fix one thing before an event. Everything here is judged by what they can
+tell at a glance: what a value holds, what a function takes, where a rule lives. Effort up front on
+a structure that gives them that is not the robustness 0009 declines; it is what 0009 is for. What
+is declined is defensive code — guards, retries, validation — against failures a handful of posts
+per event makes negligible. Structure makes reading cheaper; robustness makes failing rarer. The
+first outranks the second.
+
+So "simple" means simple to understand, not simple to write:
+
+- **Knowledge goes in code, not prose.** What a value holds, what a function takes and what a
+  boundary sends are declared in types and signatures, where pyright checks them — not narrated in
+  a docstring or in this file, where nothing does. A docstring that has to explain what an argument
+  holds is a missing type. This file says why; the code says what.
+- **Every shape the API answers is declared in this repo.** `src/fzd_api.py` returns `TypedDict`s,
+  one per response schema, under the API's own schema names and wire field names, so a name greps
+  across both repos. A `TypedDict` is a claim pyright checks at every read site, not a parser: no
+  runtime validation, no renaming layer. A `dict[str, Any]` past the client is a missing
+  declaration, not simplicity.
+- **A fallback is a claim about the data, and the claim has to be checkable from where the reader
+  stands.** `x or y`, `.get(k)`, a default, a truncation: each says a case exists. Before writing
+  one, read the column and prod's rows. If the case does not exist, the fix is upstream — the API
+  guarantees the value and the type says `str` — and the guard is deleted, not typed. If it exists
+  because the API shapes one thing two ways, that is upstream too. If the platform or the data
+  really allows it, keep the guard and put the reason on the constant or the branch. Idiom is not
+  the question: `a or b` is fine when a reader can see what `b` covers.
+- **Dense code is a defect, not a style.** A line a reader has to unpack — subscripts chained into
+  untyped values, a search for what a field already holds, a comprehension doing three things — is
+  rewritten, not commented. A comment is for what the code cannot say (see "Comments").
+- Do not add a step unless it is obviously needed, and prefer readable code over code that guards
+  against concurrency or edge cases that this scale makes negligible.
 
 When to add, and when to remove:
 
 - **Structure has to pay for something specific.** A helper, a layer or a rule exists because it
   makes one named hard thing mechanical — the two-store split under "Scheduling" exists so post text
-  stays editable after a job is queued, and for no other reason. Anything not paying for something
-  like that should be deleted, not kept out of respect.
+  stays editable after a job is queued; knowing what a value holds without opening another repo is
+  another. Anything not paying for something like that should be deleted, not kept out of respect.
 - **An exception is the bar for the next one.** The optional API settings under "Configuration" are
   the deliberate guard this bot carries: a bounded failure of two commands instead of the whole
   bot. A new guard is measured against that one and has to be at least as well-founded.
@@ -178,7 +204,8 @@ bot never sees a `users.id`, which is why the commands were ported rather than h
 endpoint. `/event_setup` (task 19-06) reads the calendar (`GET /v1/events`), an event
 (`GET /v1/events/{id}`), the in-game rotation and lineup offers (`GET /v1/ingame/…`) and the
 lineup catalogue (`GET /v1/lineups`), and writes the scoring and the schedule. Every method
-answers the decoded JSON as sent, datetimes as ISO 8601 strings; callers parse what they use.
+answers the decoded JSON as sent, datetimes as ISO 8601 strings, typed as the `TypedDict` of the
+response schema it reads (see "Design philosophy"); callers parse what they use.
 
 Deliberate properties, all of them load-bearing:
 

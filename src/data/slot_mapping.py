@@ -69,12 +69,7 @@ def prix_emoji_name(mode: str, lineup: str | None) -> str:
 def track_names(slot: dict[str, Any]) -> list[str]:
     if slot["mode"] not in MODES_WITH_TRACK_LIST or slot["lobby"] != "private":
         return []
-    # A mirror track shares its name with the standard one; only `type` tells
-    # them apart, and the posts print names.
-    return [
-        f"Mirror {track['name']}" if track["type"] == "mirror" else track["name"]
-        for track in slot["tracks"]
-    ]
+    return [track["name"] for track in slot["tracks"]]
 
 
 def prix_list_from_slots(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
