@@ -1,10 +1,9 @@
 """
 /event_setup and /help.
 
-/event_setup writes an event's scoring and schedule through the FZD API and
-then feeds the committed schedule to the post pipeline; the pipeline itself
-(`build_posts`, `prepare_post_outputs`) is unchanged in what it asks and
-produces.
+/event_setup writes an event's scoring and schedule through the FZD API, then
+hands the written schedule to the post pipeline (`build_posts`,
+`prepare_post_outputs`).
 """
 
 import logging
@@ -14,21 +13,20 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.data.event_post_text import access_roles, help_text_1, help_text_2
-from src.data.slot_mapping import prix_list_from_slots
 from src.fzd_api import FzdApiError
 from src.settings import get_settings
 from src.utils.build_hostposts import build_posts
 from src.utils.hostpost_exports import prepare_post_outputs
 from src.views.event_setup import EventSetupView, parse_instant
 
+TEST_MODE_NOTICE = (
+    "## NOTE: HostPost is in test mode.\nPost times are overridden to begin immediately and be approximately "
+    "30 seconds apart. Check /list_all_autoposts for the trigger times.\nNo roles will be pinged."
+)
+
 logger = logging.getLogger(__name__)
 
 CALENDAR_DAYS = 14
-
-TEST_ANNOUNCE = (
-    "## NOTE: HostPost is in test mode.\nPost times will be overridden to begin immediately and be "
-    "approximately 30 seconds apart. Check /list_all_autoposts to find the trigger times.\nNo roles will be pinged."
-)
 
 
 class EventBuilder(commands.Cog):
@@ -61,7 +59,7 @@ class EventBuilder(commands.Cog):
             )
         return choices[:25]
 
-    @app_commands.command(name="event_setup", description="Set up an event's slots and scoring, then prepare its posts.")
+    @app_commands.command(name="event_setup", description="Set up an event's slots and scoring.")
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def event_setup(self, interaction: discord.Interaction, event: str):
         api = self.bot.api
@@ -83,20 +81,20 @@ class EventBuilder(commands.Cog):
             return
 
         view = EventSetupView(self.bot, interaction, detail)
-        await interaction.followup.send(view.content(), view=view, ephemeral=True)
-        timed_out = await view.wait()
-        if timed_out or view.slots is None:
-            # The view has already said what happened.
+        await interaction.followup.send(view=view, ephemeral=True)
+        await view.wait()
+        if view.prix_list is None or view.autopost is None:
             return
 
-        event_name = detail["event"]
-        prix_list = prix_list_from_slots(view.slots)
-        post_struct = await build_posts(self.bot, event_name, detail["scheduled_event_id"], prix_list)
+        # The wizard's last click, not the command: the command's token can
+        # expire while the wizard runs, and every post below is a followup.
+        followup_to = view.last_interaction
+        post_struct = await build_posts(self.bot, view.event_name, view.event_id, view.prix_list)
         await prepare_post_outputs(
-            self.bot, interaction, event_name, post_struct, prix_list, view.autopost, view.validate
+            self.bot, followup_to, view.event_name, post_struct, view.prix_list, view.autopost, view.validate
         )
         if get_settings().test_flag == 1 and view.autopost:
-            await interaction.followup.send(TEST_ANNOUNCE)
+            await followup_to.followup.send(TEST_MODE_NOTICE)
 
     @app_commands.command(name="help", description="Information about the HostPost bot.")
     async def help(self, interaction: discord.Interaction):

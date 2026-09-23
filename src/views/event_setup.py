@@ -1,25 +1,28 @@
 """
-The /event_setup wizard: one ephemeral message, edited page by page.
+The /event_setup wizard: one ephemeral Components V2 message, rebuilt on every
+click.
 
-The draft is view state until Confirm, and nothing is written before it. The
-pages ask only what the API cannot answer: which minute a slot starts, which
-kind of lobby it is raced in, and which league a private Grand Prix runs. What
-the public game offers at a minute is read from the API and shown as a choice.
+The host picks the type of event, answers one modal of settings, then builds
+the schedule on one page. The draft is view state until Confirm, and nothing is
+written before it. A modal asks what is typed or fixed; the message asks what
+depends on the API's answer for a minute, because a modal cannot change while
+it is open.
 
-Every page that asks the API defers first: a hop from the Raspberry Pi to the
+Every handler that asks the API defers first: a hop from the Raspberry Pi to the
 VPS can outrun Discord's three-second interaction window.
 """
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import discord
 from discord.ext import commands
 
-from src.data.slot_mapping import prix_emoji_name
+from src.data.event_post_text import events
+from src.data.slot_mapping import prix_emoji_name, prix_list_from_slots
 from src.error_alerts import send_error_alert
 from src.fzd_api import FzdApiError
 from src.utils.hostpost_utils import discord_timestamp
@@ -32,49 +35,72 @@ logger = logging.getLogger(__name__)
 # nothing to be sent through.
 WIZARD_TIMEOUT_SECONDS = 14 * 60
 
-FIRST_SLOT_OFFSETS = (-60, -30, 0, 30, 60)
-PRIX_OFFSETS = (20, 25, 30, 35, 40, 45, 60)
+EventType = Literal["gpmp", "cmp", "race", "tb"]
+EVENT_TYPES: dict[EventType, str] = {
+    "gpmp": "Grand Prix and Mini Prix",
+    "cmp": "Classic Mini Prix",
+    "race": "Single races",
+    "tb": "Team Battle",
+}
+# How FZD runs each type, not what the API admits: widening one is an edit here
+# and a stage run. Each pair is one button on the type page.
+LOBBIES: dict[EventType, tuple[str, ...]] = {
+    "gpmp": ("public", "private", "mixed"),
+    "cmp": ("private",),
+    "race": ("public", "private"),
+    "tb": ("public", "private"),
+}
+# Scored on points by how FZD runs it; the modal does not ask.
+POINTS_ONLY: set[EventType] = {"tb"}
+# The modes a single races slot may be, by short name, as the mode buttons name them.
+RACE_MODES = {"99": "99 Race", "Pro": "Pro Tracks"}
+# How a race slot names its mode in the schedule and the lineup select.
+RACE_MODE_NAMES = {"99": "99", "Pro": "Pro Tracks", "TB": "Team Battle"}
+
+# Minutes from the previous slot: what the time select offers, and what the
+# next time moves on by after a slot is added.
+PRIX_OFFSETS = (20, 25, 30, 35, 40)
+PRIX_GAP = 30
 RACE_OFFSETS = (5, 10, 15, 20, 30)
-RACE_GAP = timedelta(minutes=5)
+RACE_GAP = 5
 # Ten offers: the minute at `now` and the nine after it.
 RACE_OFFER_LOOKAHEAD_MINUTES = 9
 PUBLIC_PRIX_LOOKAHEAD_MINUTES = 180
-# One button each, two to a row on rows 0-3; row 4 is Finish and Back.
 PUBLIC_PRIX_SHOWN = 6
+BUTTONS_PER_ROW = 5
 SELECT_LIMIT = 25
 
-KIND_AND_LOBBIES = (
-    ("Prix, all public", "prix:public"),
-    ("Prix, all private", "prix:private"),
-    ("Prix, mixed (lobby chosen per slot)", "prix:mixed"),
-    ("Single races, all public", "race:public"),
-    ("Single races, all private", "race:private"),
-    ("Single races, mixed (lobby chosen per slot)", "race:mixed"),
-)
-KIND_LABELS = {value: label for label, value in KIND_AND_LOBBIES}
-
+CLASSIC_MINI_PRIX = "cMP"
+SCHEDULE_HEADING = "### Schedule\nHere you can see the schedule as you fill it out."
 MACHINE_MASTERY_RULE = "Machine Mastery: each machine's score counts once; a repeated machine keeps its best."
+MACHINE_MASTERY_HINT = "Each machine's score counts once; a repeated one keeps its best. Points scoring only."
 
 
 @dataclass
 class SlotDraft:
     """One slot as the host stated it, before the API resolves the lineup."""
 
-    label: str
+    name: str
     starts_at: datetime
     lobby: str
     mode: str | None = None
     lineup_id: int | None = None
     # The custom emoji's name, or "". Resolved in the guild at render time.
     emoji_name: str = ""
+    # The time the pick was offered from, which is where going back to this
+    # slot offers again: a 99 pick at 22:07 was chosen from the offers at 22:05.
+    offered_from: datetime = field(kw_only=True)
+
+    def same_pick(self, other: "SlotDraft") -> bool:
+        return (self.name, self.starts_at, self.lobby) == (other.name, other.starts_at, other.lobby)
 
     def entry(self) -> dict[str, Any]:
-        return {
-            "mode": self.mode,
-            "lineup_id": self.lineup_id,
-            "starts_at": self.starts_at.isoformat(),
-            "lobby": self.lobby,
-        }
+        """The slot as the schedule write takes it: exactly one of `lineup_id`
+        and `mode`, which the API refuses both or neither of. A mode alone is
+        resolved to what the game offers at the minute, or to the mode's
+        placeholder."""
+        named = {"lineup_id": self.lineup_id} if self.lineup_id is not None else {"mode": self.mode}
+        return {**named, "starts_at": self.starts_at.isoformat(), "lobby": self.lobby}
 
 
 def parse_instant(value: str) -> datetime:
@@ -95,80 +121,127 @@ def nearest_instant(reference: datetime, hour: int, minute: int) -> datetime:
     )
 
 
+def parse_hhmm(reference: datetime, text: str) -> datetime:
+    """Raises ValueError for anything that is not a time of day as HH:MM."""
+    hour, minute = (int(part) for part in text.strip().split(":"))
+    return nearest_instant(reference, hour, minute)
+
+
 def describe_slot(slot: dict[str, Any]) -> str:
     """A written slot as the API answered it: `20:00 public Grand Prix: Knight League`.
-    `starts_at` and `lobby` are null on a slot entered without them."""
+    `starts_at` and `lobby` are null on a slot entered without them. A slot on
+    its mode's placeholder has no tracks, and its lineup name says only that,
+    so it is shown by the mode alone."""
     name = slot["mode"]
-    if slot["lineup_name"] and slot["lineup_name"] != slot["mode"]:
+    if slot["tracks"]:
         name += f": {slot['lineup_name']}"
     when = hhmm(parse_instant(slot["starts_at"])) if slot["starts_at"] else "time not entered,"
     return f"{when} {slot['lobby'] or 'lobby unknown'} {name}"
 
 
-class ExactTimeModal(discord.ui.Modal, title="Exact time (UTC)"):
-    time_input = discord.ui.TextInput(label="HH:MM, UTC", placeholder="19:00", min_length=4, max_length=5)
+class WizardModal(discord.ui.Modal):
+    """A modal whose failures take the wizard's error path, and its alert."""
 
+    def __init__(self, wizard: "EventSetupView", *, title: str) -> None:
+        super().__init__(title=title)
+        self.wizard = wizard
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        await self.wizard.fail(interaction, error, where=type(self).__name__)
+
+
+class ExactTimeModal(WizardModal):
     def __init__(
         self,
+        wizard: "EventSetupView",
         reference: datetime,
         on_time: Callable[[discord.Interaction, datetime], Awaitable[None]],
     ) -> None:
-        super().__init__()
+        super().__init__(wizard, title="Exact time (UTC)")
         self.reference = reference
         self.on_time = on_time
+        self.time_input = discord.ui.TextInput(placeholder=hhmm(reference), min_length=4, max_length=5)
+        self.add_item(discord.ui.Label(text="HH:MM, UTC", component=self.time_input))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
-            hour, minute = (int(part) for part in self.time_input.value.split(":"))
-            instant = nearest_instant(self.reference, hour, minute)
+            instant = parse_hhmm(self.reference, self.time_input.value)
         except ValueError:
             await interaction.response.send_message("Enter the time as HH:MM, UTC.", ephemeral=True)
             return
         await self.on_time(interaction, instant)
 
 
-class MaxLossModal(discord.ui.Modal, title="Maximum time loss"):
-    seconds_input = discord.ui.TextInput(label="Seconds behind the leader", placeholder="60", max_length=8)
+class SettingsModal(WizardModal):
+    """The event's settings. `scoring_only` leaves out the start time, which the
+    slots depend on, so it can be reopened from the schedule page without
+    touching what is entered there.
 
-    def __init__(self, wizard: "EventSetupView") -> None:
-        super().__init__()
-        self.wizard = wizard
+    A modal runs nothing until it is submitted, so no field can be disabled by
+    another's answer: each says when it applies, and is ignored otherwise."""
+
+    def __init__(self, wizard: "EventSetupView", *, scoring_only: bool) -> None:
+        assert wizard.event_type is not None
+        super().__init__(wizard, title=f"{EVENT_TYPES[wizard.event_type]}, {wizard.lobbies} lobbies")
+
+        self.first_slot: discord.ui.TextInput | None = None
+        if not scoring_only:
+            self.first_slot = discord.ui.TextInput(default=wizard.first_slot_text, min_length=4, max_length=5)
+            self.add_item(
+                discord.ui.Label(
+                    text="Event start time, HH:MM UTC",
+                    description=f"Scheduled for {hhmm(wizard.starts_at)} UTC. The first slot starts then.",
+                    component=self.first_slot,
+                )
+            )
+
+        self.scoring: discord.ui.RadioGroup | None = None
+        self.max_loss: discord.ui.TextInput | None = None
+        if wizard.event_type not in POINTS_ONLY:
+            self.scoring = discord.ui.RadioGroup(
+                options=[
+                    discord.RadioGroupOption(label=label, value=value, default=value == wizard.scoring)
+                    for label, value in (("Points", "points"), ("Time", "time"))
+                ]
+            )
+            self.add_item(discord.ui.Label(text="Scoring", component=self.scoring))
+
+            self.max_loss = discord.ui.TextInput(
+                default=wizard.max_loss_text, placeholder="60", required=False, max_length=8
+            )
+            self.add_item(
+                discord.ui.Label(
+                    text="Maximum time loss, seconds",
+                    description="Time scoring only; ignored for points.",
+                    component=self.max_loss,
+                )
+            )
+
+        self.mulligans = discord.ui.TextInput(default=wizard.mulligans_text, max_length=3)
+        self.add_item(
+            discord.ui.Label(
+                text="Mulligans",
+                description="Results dropped before totalling. Ignored with Machine Mastery.",
+                component=self.mulligans,
+            )
+        )
+
+        self.machine_mastery = discord.ui.Checkbox(default=wizard.machine_mastery)
+        self.add_item(
+            discord.ui.Label(text="Machine Mastery", description=MACHINE_MASTERY_HINT, component=self.machine_mastery)
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            centiseconds = round(float(self.seconds_input.value) * 100)
-        except ValueError:
-            centiseconds = 0
-        if centiseconds <= 0:
-            await interaction.response.send_message("Enter the maximum loss in seconds, above zero.", ephemeral=True)
-            return
-        self.wizard.max_time_loss_cs = centiseconds
-        await self.wizard.show(interaction)
+        await self.wizard.on_settings(interaction, self)
 
 
-class MulligansModal(discord.ui.Modal, title="Mulligans"):
-    count_input = discord.ui.TextInput(label="Results dropped before totalling", placeholder="1", max_length=3)
-
-    def __init__(self, wizard: "EventSetupView") -> None:
-        super().__init__()
-        self.wizard = wizard
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        count = self.count_input.value.strip()
-        if not count.isdecimal():
-            await interaction.response.send_message("Enter the mulligans as a whole number, 0 or more.", ephemeral=True)
-            return
-        self.wizard.mulligans = int(count)
-        await self.wizard.show(interaction)
-
-
-class EventSetupView(discord.ui.View):
-    """Pages: `replace` (only when the event already has slots), `config`,
-    then `public_prix` or one `slot` page per slot, `review`, and after Confirm
-    the `autopost` and `validate` questions the post pipeline asks.
+class EventSetupView(discord.ui.LayoutView):
+    """Pages: `type`, `schedule`, then `posting`. Confirm writes; `posting`
+    asks how the event's posts go out and ends the wizard.
 
     When the view stops, `slots` is the schedule the API answered after the
-    write, or None if nothing was written.
+    write, or None if nothing was written. `prix_list` and `autopost` are set
+    only when the host answered `posting`, and the caller builds the posts.
     """
 
     def __init__(self, bot: commands.Bot, interaction: discord.Interaction, detail: dict[str, Any]) -> None:
@@ -185,33 +258,56 @@ class EventSetupView(discord.ui.View):
         self.ends_at = parse_instant(detail["ends_at"])
         self.existing_slots: list[dict[str, Any]] = detail["slots"]
 
-        # Page 1. Scoring is pre-filled from what the event already has.
+        # Settings. Scoring is pre-filled from what the event already has; the
+        # typed fields are kept as typed, so a modal that did not validate
+        # reopens with the host's input rather than the last good value.
+        self.event_type: EventType | None = None
+        self.lobbies: str | None = None
         self.scoring: str | None = detail["scoring_method"] if detail["scoring_method"] in ("points", "time") else None
         self.mulligans: int = detail["scoring"]["num_mulligans"]
-        self.max_time_loss_cs: int | None = detail["scoring"]["max_time_loss_cs"]
         self.machine_mastery: bool = detail["scoring"]["machine_counts_once"]
-        self.kind: str | None = None
-        self.lobbies: str | None = None
-        self.first_start: datetime | None = None
+        self.max_time_loss_cs: int | None = detail["scoring"]["max_time_loss_cs"]
+        self.max_loss_text = f"{self.max_time_loss_cs / 100:g}" if self.max_time_loss_cs else ""
+        self.mulligans_text = str(self.mulligans)
+        self.first_slot_text = hhmm(self.starts_at)
+        self.first_start = self.starts_at
+        # The sentence for a settings submit that did not validate; shown once.
+        self.notice: str | None = None
 
-        # Slots.
+        # The schedule.
         self.drafts: list[SlotDraft] = []
+        self.cursor = 0
+        self.slot_time = self.starts_at
+        # The mode the slot at the cursor is picked in, on a single races event.
+        self.race_mode = "99"
+        self.candidates: list[SlotDraft] = []
+        # Whether the game offered something at `slot_time` that falls outside
+        # the slot's neighbours, as opposed to offering nothing.
+        self.offered_outside = False
+        self.private_leagues: list[dict[str, Any]] = []
         self.public_entries: list[SlotDraft] = []
         self.public_picks: list[int] = []
-        self.slot_lobby: str | None = None
-        self.slot_time: datetime | None = None
-        self.slot_candidates: list[SlotDraft] = []
-        self.slot_pick: int | None = None
 
         # Outcome.
         self.slots: list[dict[str, Any]] | None = None
-        self.autopost = False
+        self.prix_list: list[dict[str, Any]] | None = None
+        self.autopost: bool | None = None
         self.validate = True
 
-        self.page = "replace" if self.existing_slots else "config"
+        self.page = "type"
         self.build()
 
     # --- plumbing ---------------------------------------------------------
+
+    @property
+    def kind(self) -> str:
+        """`game_modes.kind`: the offsets between slots follow it."""
+        return "race" if self.event_type in ("race", "tb") else "prix"
+
+    @property
+    def public_prix(self) -> bool:
+        """The one page that picks from the rotation rather than slot by slot."""
+        return self.event_type == "gpmp" and self.lobbies == "public"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.invoker_id:
@@ -221,16 +317,22 @@ class EventSetupView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         if self.slots is None:
-            text = "This event setup timed out and wrote nothing. Run /event_setup again."
+            self.render_text("This event setup timed out and wrote nothing. Run /event_setup again.")
         else:
-            text = "The schedule was written, but the setup timed out before the posts were built. Run /event_setup again and confirm the same schedule."
+            self.render_text(
+                f"{self.written()}\n\nThis event setup timed out before the posts were built. "
+                "Run /event_setup again to build them; it replaces the schedule with what you pick."
+            )
         try:
-            await self.last_interaction.edit_original_response(content=text, view=None)
+            await self.last_interaction.edit_original_response(view=self)
         except discord.HTTPException:
             pass
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item) -> None:
-        logger.error("event_setup wizard failed on %s", item, exc_info=error)
+        await self.fail(interaction, error, where=str(item))
+
+    async def fail(self, interaction: discord.Interaction, error: Exception, *, where: str) -> None:
+        logger.error("event_setup wizard failed on %s", where, exc_info=error)
         await send_error_alert(self.bot, where="event_setup wizard", error=error, interaction=interaction)
         await self.finish(interaction, "ERROR! Something went wrong, contact FZD staff for help!")
 
@@ -240,16 +342,23 @@ class EventSetupView(discord.ui.View):
         self.last_interaction = interaction
         self.build()
         if interaction.response.is_done():
-            await interaction.edit_original_response(content=self.content(), view=self)
+            await interaction.edit_original_response(view=self)
         else:
-            await interaction.response.edit_message(content=self.content(), view=self)
+            await interaction.response.edit_message(view=self)
+
+    def render_text(self, text: str) -> None:
+        """A V2 message has no `content`; a closing sentence is a text block
+        with nothing left to click."""
+        self.clear_items()
+        self.add_item(discord.ui.Container(discord.ui.TextDisplay(text)))
 
     async def finish(self, interaction: discord.Interaction, text: str) -> None:
         self.last_interaction = interaction
+        self.render_text(text)
         if interaction.response.is_done():
-            await interaction.edit_original_response(content=text, view=None)
+            await interaction.edit_original_response(view=self)
         else:
-            await interaction.response.edit_message(content=text, view=None)
+            await interaction.response.edit_message(view=self)
         self.stop()
 
     async def call_then_show(self, interaction: discord.Interaction, work: Callable[[], Awaitable[None]]) -> None:
@@ -263,205 +372,178 @@ class EventSetupView(discord.ui.View):
             return
         await self.show(interaction)
 
-    def add_select(
-        self,
-        placeholder: str,
-        options: list[discord.SelectOption],
-        handler: Callable[[discord.Interaction, list[str]], Awaitable[None]],
-        *,
-        row: int,
-        max_values: int = 1,
-    ) -> None:
-        select = discord.ui.Select(
-            placeholder=placeholder, options=options[:SELECT_LIMIT], row=row, max_values=max_values
-        )
-
-        async def callback(interaction: discord.Interaction) -> None:
-            await handler(interaction, select.values)
-
-        select.callback = callback
-        self.add_item(select)
-
-    def add_button(
+    def button(
         self,
         label: str,
         handler: Callable[[discord.Interaction], Awaitable[None]],
         *,
         style: discord.ButtonStyle = discord.ButtonStyle.secondary,
-        row: int = 4,
-        emoji: discord.Emoji | None = None,
+        emoji: discord.Emoji | str | None = None,
         disabled: bool = False,
-    ) -> None:
-        button = discord.ui.Button(label=label, style=style, row=row, emoji=emoji, disabled=disabled)
+    ) -> discord.ui.Button:
+        button = discord.ui.Button(label=label[:80], style=style, emoji=emoji, disabled=disabled)
         button.callback = handler
-        self.add_item(button)
+        return button
 
-    @staticmethod
-    def options(pairs: list[tuple[str, str]], chosen: set[str]) -> list[discord.SelectOption]:
-        return [discord.SelectOption(label=label[:100], value=value, default=value in chosen) for label, value in pairs]
+    def select(
+        self,
+        placeholder: str,
+        options: list[discord.SelectOption],
+        handler: Callable[[discord.Interaction, str], Awaitable[None]],
+    ) -> discord.ui.ActionRow:
+        select = discord.ui.Select(placeholder=placeholder, options=options[:SELECT_LIMIT])
+
+        async def callback(interaction: discord.Interaction) -> None:
+            await handler(interaction, select.values[0])
+
+        select.callback = callback
+        return discord.ui.ActionRow(select)
 
     def emoji(self, name: str) -> discord.Emoji | None:
         """The guild's custom emoji of that name; None when it has none, and a
         button or a line then simply goes without."""
         return discord.utils.get(self.guild_emojis, name=name) if name else None
 
+    def slot_line(self, draft: SlotDraft) -> str:
+        emoji = self.emoji(draft.emoji_name)
+        return f"{f'{emoji} ' if emoji else ''}{hhmm(draft.starts_at)} {draft.lobby} {draft.name}"
+
     def header(self) -> str:
         return f"## {self.event_name}, scheduled {discord_timestamp(self.starts_at, 'long')}"
 
     def scoring_line(self) -> str:
-        if not self.scoring:
-            return "Scoring: not chosen"
-        parts = [self.scoring]
-        if self.scoring == "time":
-            cap = f"{self.max_time_loss_cs / 100:.2f} s" if self.max_time_loss_cs else "not set"
-            parts.append(f"maximum loss {cap}")
+        parts = [self.scoring or "not chosen"]
+        if self.scoring == "time" and self.max_time_loss_cs:
+            parts.append(f"maximum loss {self.max_time_loss_cs / 100:.2f} s")
         parts.append("Machine Mastery" if self.machine_mastery else f"{self.mulligans} mulligan(s)")
         return "Scoring: " + ", ".join(parts)
 
-    # --- rendering --------------------------------------------------------
-
     def build(self) -> None:
         self.clear_items()
-        getattr(self, f"build_{self.page}")()
+        box = discord.ui.Container()
+        getattr(self, f"build_{self.page}")(box)
+        self.add_item(box)
 
-    def content(self) -> str:
-        return getattr(self, f"content_{self.page}")()
+    # --- page: the type -----------------------------------------------------
 
-    # Page: replace?
+    def build_type(self, box: discord.ui.Container) -> None:
+        lines = [self.header()]
+        if self.existing_slots:
+            listed = "\n".join(f"{index}. {describe_slot(slot)}" for index, slot in enumerate(self.existing_slots, 1))
+            lines.append(
+                f"⚠️ This event already has a schedule:\n{listed}\n"
+                "Continuing replaces it at Confirm; nothing changes before then. "
+                "The API refuses the replacement once a result has been recorded."
+            )
+        lines.append("### What kind of event is this, and in which lobbies?")
+        box.add_item(discord.ui.TextDisplay("\n".join(lines)))
+        for event_type, label in EVENT_TYPES.items():
+            box.add_item(discord.ui.TextDisplay(f"**{label}**"))
+            box.add_item(
+                discord.ui.ActionRow(
+                    *(
+                        self.button(
+                            lobby.capitalize(),
+                            self.type_chooser(event_type, lobby),
+                            style=discord.ButtonStyle.primary
+                            if (event_type, lobby) == (self.event_type, self.lobbies)
+                            else discord.ButtonStyle.secondary,
+                        )
+                        for lobby in LOBBIES[event_type]
+                    )
+                )
+            )
+        if self.notice:
+            box.add_item(discord.ui.TextDisplay(f"⚠️ {self.notice}"))
+            self.notice = None
+            box.add_item(
+                discord.ui.ActionRow(self.button("Fix settings", self.on_fix_settings, style=discord.ButtonStyle.primary))
+            )
+        box.add_item(discord.ui.Separator())
+        box.add_item(discord.ui.ActionRow(self.button("Cancel", self.on_cancel)))
 
-    def content_replace(self) -> str:
-        listed = "\n".join(f"{index}. {describe_slot(slot)}" for index, slot in enumerate(self.existing_slots, start=1))
-        return (
-            f"{self.header()}\nThis event already has a schedule:\n{listed}\n\n"
-            "Replace it? The whole schedule is rewritten at Confirm, and nothing changes before then. "
-            "The API refuses the replacement once a result has been recorded."
-        )
+    def type_chooser(self, event_type: EventType, lobby: str) -> Callable[[discord.Interaction], Awaitable[None]]:
+        async def choose(interaction: discord.Interaction) -> None:
+            self.event_type, self.lobbies = event_type, lobby
+            await interaction.response.send_modal(SettingsModal(self, scoring_only=False))
 
-    def build_replace(self) -> None:
-        self.add_button("Replace", self.on_replace, style=discord.ButtonStyle.danger)
-        self.add_button("Cancel", self.on_cancel)
+        return choose
 
-    async def on_replace(self, interaction: discord.Interaction) -> None:
-        self.page = "config"
-        await self.show(interaction)
+    async def on_fix_settings(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(SettingsModal(self, scoring_only=False))
 
     async def on_cancel(self, interaction: discord.Interaction) -> None:
         await self.finish(interaction, "Nothing changed.")
 
-    # Page: configuration.
+    async def on_settings(self, interaction: discord.Interaction, modal: SettingsModal) -> None:
+        if modal.scoring is not None and modal.max_loss is not None:
+            self.scoring = modal.scoring.value
+            self.max_loss_text = modal.max_loss.value.strip()
+        else:
+            self.scoring = "points"
+        self.machine_mastery = modal.machine_mastery.value
+        self.mulligans_text = modal.mulligans.value.strip()
+        if modal.first_slot is not None:
+            self.first_slot_text = modal.first_slot.value.strip()
 
-    def content_config(self) -> str:
-        lines = [self.header(), self.scoring_line()]
-        if self.machine_mastery:
-            lines.append(MACHINE_MASTERY_RULE)
-        if self.kind:
-            lines.append(f"Event: {KIND_LABELS[f'{self.kind}:{self.lobbies}']}")
-        if self.first_start:
-            lines.append(f"First slot: {hhmm(self.first_start)} UTC, {discord_timestamp(self.first_start, 'short')} your time")
-            if not self.starts_at <= self.first_start <= self.ends_at:
-                lines.append(
-                    f"⚠️ That is outside the scheduled window ({hhmm(self.starts_at)}–{hhmm(self.ends_at)} UTC). "
-                    "The calendar keeps the scheduled time; the posts follow the first slot."
-                )
-        return "\n".join(lines)
+        self.notice = self.read_settings()
+        if self.notice or modal.first_slot is None:
+            await self.show(interaction)
+        else:
+            await self.call_then_show(interaction, self.begin_schedule)
 
-    def build_config(self) -> None:
-        self.add_select(
-            "Scoring",
-            self.options([("Points", "points"), ("Time", "time")], {self.scoring or ""}),
-            self.on_scoring,
-            row=0,
-        )
-        self.add_select(
-            "Kind of event, and its lobbies",
-            self.options(list(KIND_AND_LOBBIES), {f"{self.kind}:{self.lobbies}"}),
-            self.on_kind,
-            row=1,
-        )
-        # Discord has no checkbox outside a modal, so the rule is a button whose
-        # label carries its state. Mulligans and the rule exclude each other on
-        # this page: `on_machine_mastery` zeroes them and this locks the button.
-        self.add_button("Mulligans", self.on_mulligans, row=2, disabled=self.machine_mastery)
-        self.add_button(f"{'☑' if self.machine_mastery else '☐'} Machine Mastery", self.on_machine_mastery, row=2)
-        chosen = self.first_start.isoformat() if self.first_start else ""
-        self.add_select(
-            "First slot time",
-            self.options(
-                [
-                    (f"{hhmm(at)} UTC ({offset:+d} min from the scheduled start)", at.isoformat())
-                    for offset in FIRST_SLOT_OFFSETS
-                    for at in [self.starts_at + timedelta(minutes=offset)]
-                ],
-                {chosen},
-            ),
-            self.on_first_start,
-            row=3,
-        )
-        self.add_button("Exact first time", self.on_exact_first_time)
-        if self.scoring == "time":
-            self.add_button("Maximum time loss", self.on_max_loss)
-        self.add_button("Next", self.on_config_next, style=discord.ButtonStyle.primary)
-
-    async def on_scoring(self, interaction: discord.Interaction, values: list[str]) -> None:
-        self.scoring = values[0]
-        if self.scoring == "points":
-            self.max_time_loss_cs = None
-        await self.show(interaction)
-
-    async def on_kind(self, interaction: discord.Interaction, values: list[str]) -> None:
-        self.kind, self.lobbies = values[0].split(":")
-        await self.show(interaction)
-
-    async def on_mulligans(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(MulligansModal(self))
-
-    async def on_machine_mastery(self, interaction: discord.Interaction) -> None:
-        self.machine_mastery = not self.machine_mastery
+    def read_settings(self) -> str | None:
+        """Parse what the modal left as text. Answers the sentence for the
+        first thing that does not parse, or None."""
+        try:
+            self.first_start = parse_hhmm(self.starts_at, self.first_slot_text)
+        except ValueError:
+            return "Enter the event start time as HH:MM, UTC."
         if self.machine_mastery:
             self.mulligans = 0
-        await self.show(interaction)
-
-    async def on_first_start(self, interaction: discord.Interaction, values: list[str]) -> None:
-        self.first_start = parse_instant(values[0])
-        await self.show(interaction)
-
-    async def on_exact_first_time(self, interaction: discord.Interaction) -> None:
-        async def set_time(modal_interaction: discord.Interaction, instant: datetime) -> None:
-            self.first_start = instant
-            await self.show(modal_interaction)
-
-        await interaction.response.send_modal(ExactTimeModal(self.starts_at, set_time))
-
-    async def on_max_loss(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(MaxLossModal(self))
-
-    async def on_config_next(self, interaction: discord.Interaction) -> None:
-        missing = []
-        if not self.scoring:
-            missing.append("the scoring")
-        if self.scoring == "time" and not self.max_time_loss_cs:
-            missing.append("the maximum time loss")
-        if not self.kind:
-            missing.append("the kind of event")
-        if not self.first_start:
-            missing.append("the first slot time")
-        if missing:
-            await interaction.response.send_message(f"Choose {', '.join(missing)} first.", ephemeral=True)
-            return
-
-        self.drafts = []
-        if self.kind == "prix" and self.lobbies == "public":
-            await self.call_then_show(interaction, self.load_public_entries)
+        elif self.mulligans_text.isdecimal():
+            self.mulligans = int(self.mulligans_text)
         else:
-            await self.call_then_show(interaction, self.begin_slot)
+            return "Enter the mulligans as a whole number, 0 or more."
+        self.max_time_loss_cs = None
+        if self.scoring == "time":
+            if self.machine_mastery:
+                return "Machine Mastery counts under points scoring only."
+            try:
+                centiseconds = round(float(self.max_loss_text) * 100)
+            except ValueError:
+                centiseconds = 0
+            if centiseconds <= 0:
+                return "Time scoring needs a maximum time loss in seconds, above zero."
+            self.max_time_loss_cs = centiseconds
+        return None
 
-    # Page: all-public prix, one toggle button per rotation entry.
+    # --- page: the schedule -------------------------------------------------
+
+    # The page works on one slot at a time: `cursor` indexes `drafts`, and at
+    # `len(drafts)` it is a new slot. Back and Forward move it without changing
+    # anything, so an earlier slot is fixed where it stands and the slots after
+    # it are kept.
+
+    async def begin_schedule(self) -> None:
+        self.page = "schedule"
+        self.drafts = []
+        self.cursor = 0
+        if self.public_prix:
+            await self.load_public_entries()
+            return
+        if self.event_type == "gpmp":
+            leagues = await self.api.lineups("GP")
+            self.private_leagues = [
+                league
+                for league in leagues
+                # A private lobby cannot start Secret GP, the league with glitch tracks.
+                if not any(track["type"] == "glitch" for track in league["tracks"])
+            ]
+        await self.enter_slot()
 
     async def load_public_entries(self) -> None:
-        assert self.first_start is not None
-        entries = await self.api.rotation(
-            self.first_start, kind="prix", lookahead_minutes=PUBLIC_PRIX_LOOKAHEAD_MINUTES
-        )
+        entries = await self.api.rotation(self.first_start, kind="prix", lookahead_minutes=PUBLIC_PRIX_LOOKAHEAD_MINUTES)
         self.public_entries = []
         for entry in entries[:PUBLIC_PRIX_SHOWN]:
             # The window containing the first slot opened earlier; the slot
@@ -469,220 +551,392 @@ class EventSetupView(discord.ui.View):
             starts_at = max(parse_instant(entry["starts_at"]), self.first_start)
             self.public_entries.append(
                 SlotDraft(
-                    label=f"{hhmm(starts_at)} {entry['lineup'] or entry['mode']}",
+                    name=entry["lineup"] or entry["mode"],
                     starts_at=starts_at,
                     lobby="public",
                     mode=entry["mode_short_name"],
                     emoji_name=prix_emoji_name(entry["mode"], entry["lineup"]),
+                    offered_from=starts_at,
                 )
             )
         self.public_picks = [0] if self.public_entries else []
-        self.page = "public_prix"
+        self.drafts = self.public_entries[:1]
 
-    def content_public_prix(self) -> str:
-        assert self.first_start is not None
-        lines = [self.header(), self.scoring_line()]
-        if not self.public_entries:
-            lines.append(f"The game runs no prix from {hhmm(self.first_start)} UTC. Go back and choose another first slot time.")
+    async def enter_slot(self) -> None:
+        """Point the page at `cursor`. An entered slot is offered again from
+        the time it was first offered from; a new one from the previous slot
+        plus the default gap."""
+        if self.cursor < len(self.drafts):
+            self.slot_time = self.drafts[self.cursor].offered_from
+        elif self.drafts:
+            self.slot_time = self.drafts[-1].starts_at + self.default_gap()
         else:
-            lines.append("Pick the prix the event runs; green is in. The API resolves each league and Mini Prix set at Confirm.")
-            picked = [
-                f"{self.emoji(draft.emoji_name) or ''} {draft.label}".strip()
-                for draft in (self.public_entries[index] for index in self.public_picks)
-            ]
-            lines.append("Picked: " + (", ".join(picked) if picked else "nothing yet"))
-        return "\n".join(lines)
+            self.slot_time = self.first_start
+        if self.event_type == "race":
+            # An entered slot keeps its mode; a new one follows the slot before it.
+            nearest = self.drafts[min(self.cursor, len(self.drafts) - 1)] if self.drafts else None
+            self.race_mode = nearest.mode if nearest and nearest.mode in RACE_MODES else "99"
+        await self.load_candidates()
 
-    def build_public_prix(self) -> None:
-        for index, draft in enumerate(self.public_entries):
-            picked = index in self.public_picks
-            self.add_button(
-                draft.label,
-                self.public_toggle(index),
-                style=discord.ButtonStyle.success if picked else discord.ButtonStyle.secondary,
-                row=index // 2,
-                emoji=self.emoji(draft.emoji_name),
+    @property
+    def slot_mode(self) -> str:
+        """The mode a race slot at the cursor is offered in."""
+        return "TB" if self.event_type == "tb" else self.race_mode
+
+    def neighbours(self) -> tuple[datetime | None, datetime | None]:
+        """The starts of the slots either side of the cursor, where there are any."""
+        before = self.drafts[self.cursor - 1].starts_at if self.cursor > 0 else None
+        after = self.drafts[self.cursor + 1].starts_at if self.cursor + 1 < len(self.drafts) else None
+        return before, after
+
+    async def load_candidates(self) -> None:
+        """What the slot at the cursor can be from `slot_time`, kept to what
+        fits between its neighbours so that a fix cannot reorder the schedule."""
+        at = self.slot_time
+        offered: list[SlotDraft] = []
+        if self.kind == "race":
+            assert self.lobbies is not None
+            mode = self.slot_mode
+            offers = await self.api.lineup_offers(
+                mode, lobby=self.lobbies, now=at, lookahead_minutes=RACE_OFFER_LOOKAHEAD_MINUTES
             )
-        if self.public_entries:
-            self.add_button("Finish", self.on_public_finish, style=discord.ButtonStyle.primary)
-        self.add_button("Back", self.on_back)
+            offered = [
+                SlotDraft(
+                    f"{RACE_MODE_NAMES[mode]}: {offer['lineup']}",
+                    parse_instant(offer["starts_at"]),
+                    self.lobbies,
+                    mode=mode,
+                    offered_from=at,
+                )
+                for offer in offers
+            ] or await self.placeholder_minutes(mode, at)
+        elif self.event_type == "cmp":
+            offered = [
+                SlotDraft(
+                    "Classic Mini Prix",
+                    at,
+                    "private",
+                    mode=CLASSIC_MINI_PRIX,
+                    emoji_name=prix_emoji_name("Classic Mini Prix", None),
+                    offered_from=at,
+                )
+            ]
+        else:
+            if self.lobbies == "mixed":
+                entries = await self.api.rotation(at, kind="prix", lookahead_minutes=0)
+                offered = [
+                    SlotDraft(
+                        entry["lineup"] or entry["mode"],
+                        at,
+                        "public",
+                        mode=entry["mode_short_name"],
+                        emoji_name=prix_emoji_name(entry["mode"], entry["lineup"]),
+                        offered_from=at,
+                    )
+                    for entry in entries
+                    if entry["mode_short_name"] != CLASSIC_MINI_PRIX
+                ]
+            offered.append(
+                SlotDraft(
+                    "Mini Prix", at, "private", mode="MP", emoji_name=prix_emoji_name("Mini Prix", None), offered_from=at
+                )
+            )
+            offered += [
+                SlotDraft(
+                    league["name"],
+                    at,
+                    "private",
+                    lineup_id=league["lineup_id"],
+                    emoji_name=prix_emoji_name("Grand Prix", league["name"]),
+                    offered_from=at,
+                )
+                for league in self.private_leagues
+            ]
+        before, after = self.neighbours()
+        self.candidates = [
+            draft
+            for draft in offered
+            if (before is None or draft.starts_at > before) and (after is None or draft.starts_at < after)
+        ]
+        self.offered_outside = bool(offered) and not self.candidates
+
+    def build_schedule(self, box: discord.ui.Container) -> None:
+        assert self.event_type is not None and self.lobbies is not None
+        summary = [
+            self.header(),
+            f"**{EVENT_TYPES[self.event_type]}**, {self.lobbies} lobbies",
+            self.scoring_line(),
+        ]
+        if self.machine_mastery:
+            summary.append(MACHINE_MASTERY_RULE)
+        first = self.drafts[0].starts_at if self.drafts else self.first_start
+        if not self.starts_at <= first <= self.ends_at:
+            summary.append(
+                f"⚠️ The first slot, {hhmm(first)} UTC, is outside the scheduled window "
+                f"({hhmm(self.starts_at)}–{hhmm(self.ends_at)} UTC). The calendar keeps the scheduled time."
+            )
+        if self.notice:
+            summary.append(f"⚠️ {self.notice}")
+            self.notice = None
+        box.add_item(
+            discord.ui.Section(discord.ui.TextDisplay("\n".join(summary)), accessory=self.button("Settings", self.on_scoring, emoji="⚙️"))
+        )
+        box.add_item(discord.ui.Separator())
+
+        if self.public_prix:
+            listed = "\n".join(f"{index}. {self.slot_line(draft)}" for index, draft in enumerate(self.drafts, 1))
+            box.add_item(discord.ui.TextDisplay(f"{SCHEDULE_HEADING}\n{listed or 'No slots yet.'}"))
+            box.add_item(discord.ui.Separator())
+            self.build_public_prix(box)
+        else:
+            lines = [
+                f"{'▶ ' if index == self.cursor else ''}{index + 1}. {self.slot_line(draft)}"
+                for index, draft in enumerate(self.drafts)
+            ]
+            if self.cursor == len(self.drafts):
+                lines.append(f"▶ {len(self.drafts) + 1}. (empty)")
+            box.add_item(discord.ui.TextDisplay("\n".join([SCHEDULE_HEADING, *lines])))
+            box.add_item(discord.ui.Separator())
+            self.build_slot(box)
+
+        box.add_item(discord.ui.Separator())
+        box.add_item(
+            discord.ui.ActionRow(
+                self.button("Start over", self.on_start_over, style=discord.ButtonStyle.danger),
+                self.button("Confirm", self.on_confirm, style=discord.ButtonStyle.success),
+            )
+        )
+
+    def build_public_prix(self, box: discord.ui.Container) -> None:
+        if not self.public_entries:
+            box.add_item(
+                discord.ui.TextDisplay(f"The game runs no prix from {hhmm(self.first_start)} UTC. Choose another first slot time.")
+            )
+        else:
+            box.add_item(discord.ui.TextDisplay("Pick the prixs you want in your schedule"))
+            buttons = [
+                self.button(
+                    f"{hhmm(draft.starts_at)} UTC {draft.name}",
+                    self.public_toggle(index),
+                    style=discord.ButtonStyle.success if index in self.public_picks else discord.ButtonStyle.secondary,
+                    emoji=self.emoji(draft.emoji_name),
+                )
+                for index, draft in enumerate(self.public_entries)
+            ]
+            for start in range(0, len(buttons), BUTTONS_PER_ROW):
+                box.add_item(discord.ui.ActionRow(*buttons[start : start + BUTTONS_PER_ROW]))
+        box.add_item(discord.ui.ActionRow(self.button("Change start time", self.on_public_first_time, style=discord.ButtonStyle.primary)))
 
     def public_toggle(self, index: int) -> Callable[[discord.Interaction], Awaitable[None]]:
         async def toggle(interaction: discord.Interaction) -> None:
             self.public_picks = sorted(set(self.public_picks) ^ {index})
+            self.drafts = [self.public_entries[pick] for pick in self.public_picks]
             await self.show(interaction)
 
         return toggle
 
-    async def on_public_finish(self, interaction: discord.Interaction) -> None:
-        if not self.public_picks:
-            await interaction.response.send_message("Pick at least one prix.", ephemeral=True)
-            return
-        self.drafts = [self.public_entries[index] for index in self.public_picks]
-        self.page = "review"
-        await self.show(interaction)
+    async def on_public_first_time(self, interaction: discord.Interaction) -> None:
+        async def set_time(modal_interaction: discord.Interaction, instant: datetime) -> None:
+            self.first_start = instant
+            self.first_slot_text = hhmm(instant)
+            await self.call_then_show(modal_interaction, self.load_public_entries)
 
-    async def on_back(self, interaction: discord.Interaction) -> None:
-        self.drafts = []
-        self.page = "config"
-        await self.show(interaction)
+        await interaction.response.send_modal(ExactTimeModal(self, self.first_start, set_time))
 
-    # Page: one slot at a time.
-
-    async def begin_slot(self) -> None:
-        previous = self.drafts[-1].starts_at if self.drafts else None
-        self.slot_lobby = None if self.lobbies == "mixed" else self.lobbies
-        if previous is None:
-            self.slot_time = self.first_start
-        elif self.kind == "race":
-            self.slot_time = previous + RACE_GAP
-        else:
-            self.slot_time = None
-        self.page = "slot"
-        await self.load_candidates()
-
-    async def load_candidates(self) -> None:
-        """What the entry select offers for this slot's lobby and minute."""
-        self.slot_candidates = []
-        self.slot_pick = None
-        lobby, at = self.slot_lobby, self.slot_time
-        if lobby is None or at is None:
-            return
-
-        if self.kind == "race":
-            offers = await self.api.lineup_offers(
-                "99", lobby=lobby, now=at, lookahead_minutes=RACE_OFFER_LOOKAHEAD_MINUTES
+    def build_slot(self, box: discord.ui.Container) -> None:
+        editing = self.drafts[self.cursor] if self.cursor < len(self.drafts) else None
+        number = self.cursor + 1
+        at = self.slot_time
+        heading = f"### Editing: slot {number}" if editing else f"### Pick what you want to run in slot {number}"
+        when = f"{hhmm(at)} UTC ({discord_timestamp(at, 'short')} your time)"
+        # A race offer carries its own minute, so a race slot starts at the
+        # pick, not at the time the offers were read from.
+        starts = f"The offers here start at {when}." if self.kind == "race" else f"The slot is set to start at {when}."
+        line = f"You can pick from the available selection here. {starts}"
+        notes = []
+        if self.offered_outside:
+            before, after = self.neighbours()
+            window = " and ".join(
+                part
+                for part in (
+                    f"after slot {number - 1} ({hhmm(before)} UTC)" if before else "",
+                    f"before slot {number + 1} ({hhmm(after)} UTC)" if after else "",
+                )
+                if part
             )
-            self.slot_candidates = [
-                SlotDraft(f"{hhmm(starts)} {offer['lineup']}", starts, lobby, mode="99")
-                for offer in offers
-                for starts in [parse_instant(offer["starts_at"])]
-            ]
-        elif lobby == "public":
-            entries = await self.api.rotation(at, kind="prix", lookahead_minutes=0)
-            self.slot_candidates = [
-                SlotDraft(f"{hhmm(at)} {entry['lineup'] or entry['mode']}", at, "public", mode=entry["mode_short_name"])
-                for entry in entries
-            ]
-        else:
-            leagues = await self.api.lineups("GP")
-            self.slot_candidates = [
-                SlotDraft(f"{hhmm(at)} Mini Prix", at, "private", mode="MP"),
-                SlotDraft(f"{hhmm(at)} Classic Mini Prix", at, "private", mode="cMP"),
-            ] + [
-                SlotDraft(f"{hhmm(at)} {league['name']}", at, "private", lineup_id=league["lineup_id"])
-                for league in leagues
-                # A private lobby cannot start Secret GP, the league with glitch tracks.
-                if not any(track["type"] == "glitch" for track in league["tracks"])
-            ]
-
-    def content_slot(self) -> str:
-        number = len(self.drafts) + 1
-        lines = [self.header(), self.scoring_line()]
-        if self.drafts:
-            lines.append("So far: " + "; ".join(f"{draft.label} ({draft.lobby})" for draft in self.drafts))
-        lines.append(f"### Slot {number}")
-        if self.lobbies == "mixed":
-            lines.append(f"Lobby: {self.slot_lobby or 'choose one'}")
-        lines.append(f"Time: {hhmm(self.slot_time) + ' UTC' if self.slot_time else 'choose one'}")
-        if self.slot_pick is not None:
-            lines.append(f"Pick: {self.slot_candidates[self.slot_pick].label}")
-        elif self.slot_lobby and self.slot_time and not self.slot_candidates:
-            what = "a 99 race" if self.kind == "race" else "a prix"
-            lines.append(f"The game offers nothing for {what} in a {self.slot_lobby} lobby at {hhmm(self.slot_time)} UTC. Choose another time.")
-        return "\n".join(lines)
-
-    def build_slot(self) -> None:
-        if self.lobbies == "mixed":
-            self.add_select(
-                "Lobby",
-                self.options([("Public", "public"), ("Private", "private")], {self.slot_lobby or ""}),
-                self.on_slot_lobby,
-                row=0,
+            notes.append(f"Slot {number} has to start {window}. Choose another time.")
+        elif self.kind == "race" and not self.candidates:
+            notes.append(
+                f"The game offers no {RACE_MODE_NAMES[self.slot_mode]} race in a {self.lobbies} lobby "
+                f"from {hhmm(at)} UTC. Choose another time."
             )
-        if self.drafts:
-            previous = self.drafts[-1].starts_at
+        elif self.lobbies == "mixed" and not any(candidate.lobby == "public" for candidate in self.candidates):
+            notes.append(f"The game runs no public prix at {hhmm(at)} UTC; the private ones are still offered.")
+        if editing:
+            notes.append("Pick to replace it and move on, or Forward to keep it.")
+        box.add_item(discord.ui.TextDisplay("\n".join([heading, line, *notes])))
+
+        if self.event_type == "race":
+            box.add_item(discord.ui.TextDisplay("**Choose the next mode**"))
+            box.add_item(
+                discord.ui.ActionRow(
+                    *(
+                        self.button(
+                            label,
+                            self.mode_chooser(mode),
+                            style=discord.ButtonStyle.primary if mode == self.race_mode else discord.ButtonStyle.secondary,
+                        )
+                        for mode, label in RACE_MODES.items()
+                    )
+                )
+            )
+
+        if self.cursor > 0:
+            previous = self.drafts[self.cursor - 1].starts_at
             offsets = RACE_OFFSETS if self.kind == "race" else PRIX_OFFSETS
-            chosen = self.slot_time.isoformat() if self.slot_time else ""
-            self.add_select(
-                "Time, from the previous slot",
-                self.options(
+            box.add_item(
+                self.select(
+                    "Time, from the previous slot",
                     [
-                        (f"{hhmm(at)} UTC (+{offset} min)", at.isoformat())
+                        discord.SelectOption(
+                            label=f"{hhmm(later)} UTC (+{offset} min)", value=later.isoformat(), default=later == at
+                        )
                         for offset in offsets
-                        for at in [previous + timedelta(minutes=offset)]
+                        for later in [previous + timedelta(minutes=offset)]
                     ],
-                    {chosen},
-                ),
-                self.on_slot_time,
-                row=1,
+                    self.on_slot_time,
+                )
             )
-            self.add_button("Exact time", self.on_exact_slot_time)
-        if self.slot_candidates:
-            placeholder = "Race" if self.kind == "race" else "Prix"
-            pairs = [(draft.label, str(index)) for index, draft in enumerate(self.slot_candidates)]
-            self.add_select(
-                placeholder,
-                self.options(pairs, {str(self.slot_pick) if self.slot_pick is not None else ""}),
-                self.on_slot_pick,
-                row=2,
-            )
-        self.add_button("Next slot", self.on_slot_next, style=discord.ButtonStyle.primary)
-        self.add_button("Finish", self.on_slot_finish, style=discord.ButtonStyle.success)
-        self.add_button("Back", self.on_back)
 
-    async def on_slot_lobby(self, interaction: discord.Interaction, values: list[str]) -> None:
-        self.slot_lobby = values[0]
+        if self.event_type == "cmp":
+            if self.candidates:
+                candidate = self.candidates[0]
+                box.add_item(
+                    discord.ui.ActionRow(
+                        self.button(
+                            self.candidate_label(candidate, editing),
+                            self.on_pick_classic,
+                            style=discord.ButtonStyle.primary,
+                            emoji=self.emoji(candidate.emoji_name),
+                        )
+                    )
+                )
+        elif self.candidates:
+            box.add_item(
+                self.select(
+                    "Choose your lineup for this slot",
+                    [
+                        discord.SelectOption(
+                            label=self.candidate_label(candidate, editing),
+                            value=str(index),
+                            emoji=self.emoji(candidate.emoji_name),
+                        )
+                        for index, candidate in enumerate(self.candidates)
+                    ],
+                    self.on_pick,
+                )
+            )
+
+        box.add_item(
+            discord.ui.ActionRow(
+                self.button("◀ Back", self.mover(-1), disabled=self.cursor == 0),
+                self.button("Forward ▶", self.mover(1), disabled=editing is None),
+                self.button("Exact time", self.on_exact_time),
+                self.button("Remove this slot", self.on_remove, style=discord.ButtonStyle.danger, disabled=editing is None),
+            )
+        )
+
+    def candidate_label(self, candidate: SlotDraft, editing: SlotDraft | None) -> str:
+        label = f"{hhmm(candidate.starts_at)} {candidate.name}"
+        if self.lobbies == "mixed":
+            label = f"{candidate.lobby.capitalize()}: {label}"
+        if editing and candidate.same_pick(editing):
+            label += " (current)"
+        return label[:100]
+
+    def mode_chooser(self, mode: str) -> Callable[[discord.Interaction], Awaitable[None]]:
+        async def choose(interaction: discord.Interaction) -> None:
+            self.race_mode = mode
+            await self.call_then_show(interaction, self.load_candidates)
+
+        return choose
+
+    async def placeholder_minutes(self, mode: str, at: datetime) -> list[SlotDraft]:
+        """A mode with no stored lineups is scheduled on its placeholder: an
+        entry naming the mode and no lineup, which the API resolves to it. A
+        private lobby starts one at any minute; a public one only while the
+        rotation runs the mode, since the schedule write refuses a public slot
+        the game is not running."""
+        minutes = [at + timedelta(minutes=offset) for offset in range(RACE_OFFER_LOOKAHEAD_MINUTES + 1)]
+        if self.lobbies == "public":
+            entries = await self.api.rotation(at, kind="race", lookahead_minutes=RACE_OFFER_LOOKAHEAD_MINUTES)
+            windows = [
+                (parse_instant(entry["starts_at"]), parse_instant(entry["ends_at"]))
+                for entry in entries
+                if entry["mode_short_name"] == mode
+            ]
+            minutes = [minute for minute in minutes if any(opens <= minute < closes for opens, closes in windows)]
+        assert self.lobbies is not None
+        return [
+            SlotDraft(f"{RACE_MODE_NAMES[mode]}: Placeholder", minute, self.lobbies, mode=mode, offered_from=at)
+            for minute in minutes
+        ]
+
+    def default_gap(self) -> timedelta:
+        return timedelta(minutes=RACE_GAP if self.kind == "race" else PRIX_GAP)
+
+    async def put(self, interaction: discord.Interaction, draft: SlotDraft) -> None:
+        """Make `draft` the slot at the cursor and move on to the next one."""
+        if self.cursor < len(self.drafts):
+            self.drafts[self.cursor] = draft
+        else:
+            self.drafts.append(draft)
+        self.cursor += 1
+        await self.call_then_show(interaction, self.enter_slot)
+
+    async def on_pick(self, interaction: discord.Interaction, value: str) -> None:
+        await self.put(interaction, self.candidates[int(value)])
+
+    async def on_pick_classic(self, interaction: discord.Interaction) -> None:
+        await self.put(interaction, self.candidates[0])
+
+    def mover(self, step: int) -> Callable[[discord.Interaction], Awaitable[None]]:
+        async def move(interaction: discord.Interaction) -> None:
+            self.cursor += step
+            await self.call_then_show(interaction, self.enter_slot)
+
+        return move
+
+    async def on_remove(self, interaction: discord.Interaction) -> None:
+        """Drop the slot at the cursor; the cursor is then on the one after it."""
+        del self.drafts[self.cursor]
+        await self.call_then_show(interaction, self.enter_slot)
+
+    async def on_slot_time(self, interaction: discord.Interaction, value: str) -> None:
+        self.slot_time = parse_instant(value)
         await self.call_then_show(interaction, self.load_candidates)
 
-    async def on_slot_time(self, interaction: discord.Interaction, values: list[str]) -> None:
-        self.slot_time = parse_instant(values[0])
-        await self.call_then_show(interaction, self.load_candidates)
-
-    async def on_exact_slot_time(self, interaction: discord.Interaction) -> None:
+    async def on_exact_time(self, interaction: discord.Interaction) -> None:
         async def set_time(modal_interaction: discord.Interaction, instant: datetime) -> None:
             self.slot_time = instant
             await self.call_then_show(modal_interaction, self.load_candidates)
 
-        await interaction.response.send_modal(ExactTimeModal(self.drafts[-1].starts_at, set_time))
+        await interaction.response.send_modal(ExactTimeModal(self, self.slot_time, set_time))
 
-    async def on_slot_pick(self, interaction: discord.Interaction, values: list[str]) -> None:
-        self.slot_pick = int(values[0])
+    async def on_scoring(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(SettingsModal(self, scoring_only=True))
+
+    async def on_start_over(self, interaction: discord.Interaction) -> None:
+        """Drop every slot entered so far and ask the type again."""
+        self.drafts = []
+        self.cursor = 0
+        self.page = "type"
         await self.show(interaction)
 
-    async def take_slot(self, interaction: discord.Interaction) -> bool:
-        if self.slot_pick is None:
-            await interaction.response.send_message("Pick what this slot runs first.", ephemeral=True)
-            return False
-        self.drafts.append(self.slot_candidates[self.slot_pick])
-        return True
-
-    async def on_slot_next(self, interaction: discord.Interaction) -> None:
-        if await self.take_slot(interaction):
-            await self.call_then_show(interaction, self.begin_slot)
-
-    async def on_slot_finish(self, interaction: discord.Interaction) -> None:
-        if await self.take_slot(interaction):
-            self.page = "review"
-            await self.show(interaction)
-
-    # Page: review and confirm.
-
-    def content_review(self) -> str:
-        listed = "\n".join(
-            f"{index}. {draft.label} ({draft.lobby})" for index, draft in enumerate(self.drafts, start=1)
-        )
-        return (
-            f"{self.header()}\n{self.scoring_line()}\n{listed}\n\n"
-            "Confirm writes the scoring, then the schedule. The API resolves each public league and Mini Prix set."
-        )
-
-    def build_review(self) -> None:
-        self.add_button("Confirm", self.on_confirm, style=discord.ButtonStyle.success)
-        self.add_button("Back", self.on_back)
-        self.add_button("Cancel", self.on_cancel)
-
     async def on_confirm(self, interaction: discord.Interaction) -> None:
+        if not self.drafts:
+            await interaction.response.send_message("Add at least one slot first.", ephemeral=True)
+            return
         assert self.scoring is not None
         await interaction.response.defer()
         try:
@@ -690,67 +944,69 @@ class EventSetupView(discord.ui.View):
                 self.event_id,
                 scoring_method=self.scoring,
                 num_mulligans=self.mulligans,
-                max_time_loss_cs=self.max_time_loss_cs if self.scoring == "time" else None,
+                max_time_loss_cs=self.max_time_loss_cs,
                 machine_counts_once=self.machine_mastery,
             )
         except FzdApiError as error:
             await self.finish(interaction, f"Nothing was written. {error}")
             return
         try:
-            self.slots = await self.api.replace_schedule(self.event_id, [draft.entry() for draft in self.drafts])
+            slots = await self.api.replace_schedule(self.event_id, [draft.entry() for draft in self.drafts])
         except FzdApiError as error:
             await self.finish(
                 interaction,
                 f"The scoring was saved, but the schedule was not. {error}\nRun /event_setup again; both writes replace what is there.",
             )
             return
-        self.page = "autopost"
+        self.slots = slots
+        # `build_gp_posts` takes the score channel from `events`, so an event
+        # missing there has no posts to build.
+        if self.event_name not in {event["fullname"] for event in events}:
+            await self.finish(
+                interaction,
+                f"{self.written()}\n\nNo posts were built: HostPost has no score channel for {self.event_name}.",
+            )
+            return
+        # Pro Tracks and Team Battle slots have no post template.
+        try:
+            self.prix_list = prix_list_from_slots(slots)
+        except ValueError as error:
+            await self.finish(interaction, f"{self.written()}\n\nNo posts were built. {error}.")
+            return
+        self.page = "posting"
         await self.show(interaction)
 
-    # Pages after the write: what the post pipeline asks.
-
-    def written_summary(self) -> str:
+    def written(self) -> str:
         assert self.slots is not None
-        listed = "\n".join(f"{index}. {describe_slot(slot)}" for index, slot in enumerate(self.slots, start=1))
-        return f"{self.header()}\nSchedule written:\n{listed}\n\n"
+        listed = "\n".join(f"{index}. {describe_slot(slot)}" for index, slot in enumerate(self.slots, 1))
+        return f"{self.header()}\n{self.scoring_line()}\n### Schedule written\n{listed}"
 
-    def content_autopost(self) -> str:
-        return (
-            f"{self.written_summary()}### :bangbang: Would you like the bot to push the announcement and prix "
-            "opening posts automatically? (Note that prix and event results posts continue to require manual "
-            "intervention through slash commands.)"
+    # --- page: posting ------------------------------------------------------
+
+    def build_posting(self, box: discord.ui.Container) -> None:
+        box.add_item(discord.ui.TextDisplay(self.written()))
+        box.add_item(discord.ui.Separator())
+        box.add_item(
+            discord.ui.TextDisplay(
+                "### Posts\n"
+                "Should HostPost push the announcement, the 10-minute warning and each prix's GO post itself? "
+                "Prix winners still wait for /post_prix_winner. Final results either wait for /validate_results "
+                "or are posted as soon as the scoreboard closes.\n"
+                "Either way, the drafts are posted in this channel with a text file."
+            )
+        )
+        box.add_item(
+            discord.ui.ActionRow(
+                self.button("Autopost, I'll validate results", self.posting_chooser(True, True), style=discord.ButtonStyle.success),
+                self.button("Autopost, skip validation", self.posting_chooser(True, False), style=discord.ButtonStyle.danger),
+                self.button("I'll post myself", self.posting_chooser(False, True)),
+            )
         )
 
-    def build_autopost(self) -> None:
-        self.add_button("Hail to the Machines", self.on_auto, style=discord.ButtonStyle.danger)
-        self.add_button("I'll do it myself", self.on_manual, style=discord.ButtonStyle.success)
+    def posting_chooser(self, autopost: bool, validate: bool) -> Callable[[discord.Interaction], Awaitable[None]]:
+        async def choose(interaction: discord.Interaction) -> None:
+            self.autopost = autopost
+            self.validate = validate
+            await self.finish(interaction, f"{self.written()}\n\nBuilding the posts…")
 
-    async def on_auto(self, interaction: discord.Interaction) -> None:
-        self.autopost = True
-        self.page = "validate"
-        await self.show(interaction)
-
-    async def on_manual(self, interaction: discord.Interaction) -> None:
-        self.autopost = False
-        await self.finish(interaction, f"{self.written_summary()}User will post all event posts.")
-
-    def content_validate(self) -> str:
-        return f"{self.written_summary()}### :bangbang: Would you like to validate final scores before scores are posted?"
-
-    def build_validate(self) -> None:
-        self.add_button("Skip validation", self.on_skip_validation, style=discord.ButtonStyle.danger)
-        self.add_button("I'll validate", self.on_validate, style=discord.ButtonStyle.success)
-
-    async def on_skip_validation(self, interaction: discord.Interaction) -> None:
-        self.validate = False
-        await self.finish(
-            interaction,
-            f"{self.written_summary()}Event announcement and prix opening posts will be posted automatically. Results will be pushed without validation.",
-        )
-
-    async def on_validate(self, interaction: discord.Interaction) -> None:
-        self.validate = True
-        await self.finish(
-            interaction,
-            f"{self.written_summary()}Event announcement and prix opening posts will be posted automatically. Host will be prompted to validate results before posting.",
-        )
+        return choose

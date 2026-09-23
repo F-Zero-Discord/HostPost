@@ -81,16 +81,12 @@ help_text_1 = (
 This bot assists hosts of weekly FZD events in creating and posting event announcements, \
 prix opening posts, and event results posts. It also has an autoposting feature that can \
 automatically post the announcement and prix opening posts at the scheduled times.\n\n\
-### /event_setup\n> Pick an event from the calendar. The bot asks for the scoring (points or \
-time, mulligans), whether the evening is prix or single races and whether lobbies are public, \
-private or chosen per slot, and when the first slot starts. It then offers what the game runs \
-at those minutes — leagues, Mini Prix sets, 99 race pairs — or, for a private prix, the eight \
-leagues and the Mini Prix. Confirm writes the scoring and the schedule to the FZD database \
-through the API; the scoreboard reads the same slots. Then you are asked if you want the bot to \
-automatically post the announcement and prix opening posts at the scheduled times in \
-https://discordapp.com/channels/1019374132342816800/1244994645155385404 and \
-https://discordapp.com/channels/1019374132342816800/1185690454658912397. Posts are then \
-generated.\n"
+### /event_setup\n> Pick an event from the calendar, then its type: Grand Prix and Mini Prix, \
+Classic Mini Prix, Single races or Team Battle, and its lobbies. A popup asks when it starts, the scoring \
+and the mulligans or Machine Mastery. The schedule page then offers what can run at each slot's time — the \
+leagues and Mini Prix the game runs, a private league or Mini Prix, 99 race pairs, Pro Tracks and \
+Team Battle races — and a pick is added straight away. Confirm writes the scoring and the schedule to the FZD database through \
+the API; the scoreboard reads the same slots. It then builds the event's posts, and can schedule them to post automatically.\n"
 )
 
 help_text_2 = (
