@@ -12,11 +12,10 @@ database. See `README.md` for the user-facing command reference.
 ## Design philosophy
 
 Per decision 0009: **contributor experience outranks robustness.** Four volunteers touch FZD's
-code, and this bot is maintained and deployed by one of them on their own hardware. A change that
-generally works and ships beats one that always works and never lands. When a choice trades "harder
-to contribute to" against "harder to break", choose the one that can be contributed to — the
-question a review asks is "could the maintainer of this bot land this change?", ahead of "is this
-maximally correct?".
+code, and this bot is maintained and deployed by one of them. A change that generally works and
+ships beats one that always works and never lands. When a choice trades "harder to contribute to"
+against "harder to break", choose the one that can be contributed to — the question a review asks is
+"could the maintainer of this bot land this change?", ahead of "is this maximally correct?".
 
 **Contributor experience is measured at read time.** The maintainer opens this repo cold, months
 after the last change, to fix one thing before an event. Everything here is judged by what they can
@@ -83,8 +82,20 @@ uv run python -m src.main             # the same entry point, without the script
 Run it from the repo root and as a module or script, never `python src/main.py`: every import is
 absolute (`from src.…`), and `change_name_and_pfp` opens `images/<file>` relative to the CWD.
 
-There is no test suite, linter, or formatter configured. `requirements.txt` is a stale export kept
-alongside `pyproject.toml`; edit dependencies in `pyproject.toml`.
+There is no test suite, linter, or formatter configured.
+
+`pyproject.toml` lists only what `src` imports, with lower bounds; `uv.lock` pins every version, so
+nothing moves until someone relocks. Upgrading is expected, not avoided: `uv lock --upgrade-package
+<name>`, run the bot on stage, commit the lock. A change that would be simpler on a newer version
+proposes the bump rather than working around the installed one. `aiomysql[rsa]` is there for
+`cryptography`, which PyMySQL needs for MySQL 8's `caching_sha2_password` full authentication.
+
+## Deployment
+
+The live bot runs on the FZD VPS as `hostpost.service`, from a checkout at `/opt/hostpost/app`;
+`ssh fzd sudo update-hostpost <branch|tag>` deploys a pushed ref. The layout, the two env files and
+an install from scratch are in `deploy/README.md`. One Discord token runs one bot, so a local run
+uses the stage application, never the live token.
 
 ## Configuration
 
@@ -117,14 +128,13 @@ the host commands say the board is not configured and skip refreshing it.
 defaults to 10). They are needed by `/event_setup`, `/update_host_for_event` and
 `/remove_host_from_event`; left empty, those three reply that the API is not configured and the
 job-management commands are unaffected. Making them required would take the whole bot down, which
-is the bounded failure Plan 15 deliberately designed against — lurch deploys this bot, and that
-deploy is not simultaneous with anything.
+is the bounded failure Plan 15 deliberately designed against — this bot is deployed on its own,
+not together with the API.
 
 Known gap: `HOSTING_SCHEDULE_CHANNEL` and `HOSTING_SCHEDULE_MESSAGE_ID` are still absent from the
-untracked `.env.dev` and `.env.prod` (absent, not empty), so startup raises a pydantic
-`ValidationError` against either until the lines are added. The stage files have the channel and
-an empty message id: no anchor message has been posted in the test guild yet, so the board is
-skipped there.
+untracked `.env.dev` (absent, not empty), so startup raises a pydantic `ValidationError` against it
+until the lines are added. The stage files have the channel and an empty message id: no anchor
+message has been posted in the test guild yet, so the board is skipped there.
 
 `TEST_FLAG=1` rewrites every scheduled post time to fire ~30 s apart starting now and swaps the
 `@Events` / `@Classic Events` role pings for inert placeholders (`src/utils/autoposts_utils.py`).
@@ -135,8 +145,8 @@ Startup (`src/main.py`, `HostBot.setup_hook`) creates the aiomysql pool (`bot.db
 global APScheduler (`bot.scheduler`), then loads three cogs and force-syncs the command tree to
 `SERVER_ID` — all commands are guild-scoped, so changes appear immediately.
 
-- `cogs/hostpost_commands.py` — `/event_setup` (schedule and scoring entry, then the post builder)
-  and `/help`. The wizard itself is `views/event_setup.py`.
+- `cogs/hostpost_commands.py` — `/event_setup` (schedule and scoring entry) and `/help`. The
+  wizard itself is `views/event_setup.py`.
 - `cogs/autopost_commands.py` — `PostScheduler`: scheduling plus every job-management command.
 - `cogs/hosting_signup.py` — host assignment (`/update_host_for_event`,
   `/remove_host_from_event`) and the live schedule embed (`/hosting_schedule`). The two host
@@ -146,11 +156,23 @@ global APScheduler (`bot.scheduler`), then loads three cogs and force-syncs the 
   (`fzd_dev`, `fzd_prod`, `fzd_playground`), so the guard always passes — it is vestigial, kept
   against a rollback rather than protecting a live gap.
 
+### Event setup
+
+`/event_setup <event>` → `EventSetupView` (`views/event_setup.py`), a Components V2 `LayoutView`:
+a type-and-lobbies page, a settings modal, and one schedule page with a cursor over the slots. `EVENT_TYPES` and
+`LOBBIES` at the top of the file are how FZD runs events, not what the API admits; widening a
+type's lobbies is an edit there and a stage run. A modal asks what is typed or fixed, the message
+what depends on the API's answer for a minute, because a modal cannot change while it is open. At
+Confirm it sends `PUT /v1/events/{id}/scoring` and `PUT /v1/events/{id}/schedule`, shows the slots
+the second answers, and a last `posting` page asks autopost and validation. The command awaits the
+view and hands those slots to the post pipeline below, answering through the view's
+`last_interaction` because the command's own token can expire while the wizard runs. An event
+missing from `events` or a slot `slot_mapping` has no shortname for (Pro Tracks, Team Battle) ends
+the wizard at Confirm with the schedule written and no posts.
+
 ### The post-building pipeline
 
-`/event_setup <event>` → `EventSetupView` (`views/event_setup.py`) collects the scoring, the kind
-of evening, and one entry per slot, then at Confirm sends `PUT /v1/events/{id}/scoring` and
-`PUT /v1/events/{id}/schedule` and keeps the slots the second answers → `prix_list_from_slots`
+The committed slots → `prix_list_from_slots`
 (`data/slot_mapping.py`) turns those into per-prix `{prix, time, prix_type, lineup}` keyed on the
 `prix_info` shortnames → `build_posts` (`utils/build_hostposts.py`) → `post_struct`, a list of
 `{name, post_text, post_type}` dicts in a **fixed order** the scheduler depends on: 1hr, 10min,
@@ -213,9 +235,8 @@ Deliberate properties, all of them load-bearing:
   A fallback would put a second copy of the identity policy back in this bot.
 - **`FzdApiError` only.** The cog catches that and replies; anything else propagates to
   `HostBot.on_app_command_error`, which alerts.
-- **Both commands `defer()` before the call.** An HTTP hop from lurch's Raspberry Pi to the VPS
-  plus a board refresh can outrun Discord's 3-second interaction window. `HostingSchedule.respond`
-  exists because a deferred interaction can only be answered with a followup, and the same helpers
+- **Both commands `defer()` before the call.** An HTTP hop to the API plus a board refresh can outrun
+  Discord's 3-second interaction window. `HostingSchedule.respond` exists because a deferred interaction can only be answered with a followup, and the same helpers
   are reached from both the deferred and the undeferred path.
 - The snowflake goes over the wire as a **string** — it exceeds 2^53 and fzd-web is also a client.
 - `tag` is trimmed to 10 characters here; the API rejects a longer one rather than truncating.
