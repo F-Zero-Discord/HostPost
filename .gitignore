@@ -1,7 +1,6 @@
 __pycache__/
 .venv
 .env
-requirements.txt
 hostbot.log
 notes.txt
 
