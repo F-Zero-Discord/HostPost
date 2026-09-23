@@ -1,0 +1,37 @@
+#!/bin/bash
+# Deploy HostPost on the VPS.
+#
+#   sudo update-hostpost dev
+#   sudo update-hostpost v0.3.0      # rollback is a previous tag
+#
+# Installed at /usr/local/sbin/update-hostpost. Same steps as update-fzdbot, but
+# `uv sync --frozen --no-dev` so the box installs exactly uv.lock, and the ref is
+# validated before the checkout moves. It pulls from GitHub: push first.
+set -euo pipefail
+
+REF="${1:?Usage: update-hostpost <tag|branch>}"
+DIR=/opt/hostpost/app
+
+as_hostpost() { sudo -u hostpost /bin/bash -c "cd '$DIR' && $1"; }
+
+echo "Deploying hostpost @ $REF ..."
+as_hostpost "git fetch --all --tags --quiet"
+
+if as_hostpost "git show-ref --verify --quiet 'refs/remotes/origin/$REF'"; then
+    as_hostpost "git checkout --quiet '$REF' && git pull --quiet"
+elif as_hostpost "git rev-parse --verify --quiet '$REF^{commit}' >/dev/null"; then
+    as_hostpost "git checkout --quiet '$REF'"
+else
+    echo "no such branch or tag on origin: $REF (the checkout is untouched)" >&2
+    exit 1
+fi
+
+as_hostpost "~/.local/bin/uv sync --frozen --no-dev --quiet"
+systemctl restart hostpost
+
+# No /health to poll: a bot that failed to log in exits, so a few seconds of
+# journal is where a bad deploy shows.
+sleep 5
+journalctl -u hostpost -n 10 --no-pager -o cat
+systemctl is-active --quiet hostpost
+echo "hostpost running @ $REF@$(as_hostpost 'git rev-parse --short HEAD')"

@@ -1,0 +1,44 @@
+# Shaped like fzdbot.service and fzd-api.service on the same box.
+#
+#   sudo install -m 644 deploy/systemd/hostpost.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now hostpost
+#
+# One Discord token runs one bot: enable this only once no other machine runs
+# HostPost's live application, or both answer every command.
+
+[Unit]
+Description=HostPost
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hostpost
+Group=hostpost
+# The repo root: imports are `src.…` and the bot opens `images/…` relative to it.
+WorkingDirectory=/opt/hostpost/app
+# Secrets. The non-secret settings are app/.env, which the bot reads itself.
+EnvironmentFile=/opt/hostpost/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/hostpost/.local/bin/uv run --no-sync hostpost
+
+Restart=on-failure
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hostpost
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hostpost
+
+[Install]
+WantedBy=multi-user.target
