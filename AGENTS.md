@@ -31,9 +31,10 @@ So "simple" means simple to understand, not simple to write:
   boundary sends are declared in types and signatures, where pyright checks them — not narrated in
   a docstring or in this file, where nothing does. A docstring that has to explain what an argument
   holds is a missing type. This file says why; the code says what.
-- **Every shape the API answers is declared in this repo.** `src/fzd_api.py` returns `TypedDict`s,
-  one per response schema, under the API's own schema names and wire field names, so a name greps
-  across both repos. A `TypedDict` is a claim pyright checks at every read site, not a parser: no
+- **Every shape the API answers is declared in this repo.** `src/api_types.py` is generated from
+  the API's OpenAPI document by `scripts/api_types.py`: one `TypedDict` per schema, under the API's
+  own schema names and wire field names, so a name greps across both repos. `src/fzd_api.py`
+  returns them. A `TypedDict` is a claim pyright checks at every read site, not a parser: no
   runtime validation, no renaming layer. A `dict[str, Any]` past the client is a missing
   declaration, not simplicity.
 - **A fallback is a claim about the data, and the claim has to be checkable from where the reader
@@ -42,7 +43,9 @@ So "simple" means simple to understand, not simple to write:
   guarantees the value and the type says `str` — and the guard is deleted, not typed. If it exists
   because the API shapes one thing two ways, that is upstream too. If the platform or the data
   really allows it, keep the guard and put the reason on the constant or the branch. Idiom is not
-  the question: `a or b` is fine when a reader can see what `b` covers.
+  the question: `a or b` is fine when a reader can see what `b` covers. `.get` on a `TypedDict` is
+  a hole in the claim — pyright types it `Any | None` for any key, declared or not — so read with
+  `[]` unless the key is `NotRequired`.
 - **Dense code is a defect, not a style.** A line a reader has to unpack — subscripts chained into
   untyped values, a search for what a field already holds, a comprehension doing three things — is
   rewritten, not commented. A comment is for what the code cannot say (see "Comments").
@@ -77,12 +80,17 @@ uv run hostpost                       # run the bot on .env — must be from the
 uv run hostpost --env stage           # against api-stage.fzd.gg / fzd_stage
 uv run hostpost --env stage-local-api # against a local fzd-api over the stage database
 uv run python -m src.main             # the same entry point, without the script
+uv run pyright                        # type check; clean is the bar
+uv run ruff check                     # lint; clean is the bar
+uv run scripts/api_types.py           # regenerate src/api_types.py from the ../fzd-api checkout
 ```
 
 Run it from the repo root and as a module or script, never `python src/main.py`: every import is
 absolute (`from src.…`), and `change_name_and_pfp` opens `images/<file>` relative to the CWD.
 
-There is no test suite, linter, or formatter configured.
+There is no test suite. `pyright` and `ruff check` are configured in `pyproject.toml` and clean; a
+change keeps them so. `ruff format` has not been applied repo-wide: a change formats the files it
+rewrites, not their neighbours.
 
 `pyproject.toml` lists only what `src` imports, with lower bounds; `uv.lock` pins every version, so
 nothing moves until someone relocks. Upgrading is expected, not avoided: `uv lock --upgrade-package
@@ -173,8 +181,8 @@ the wizard at Confirm with the schedule written and no posts.
 ### The post-building pipeline
 
 The committed slots → `prix_list_from_slots`
-(`data/slot_mapping.py`) turns those into per-prix `{prix, time, prix_type, lineup}` keyed on the
-`prix_info` shortnames → `build_posts` (`utils/build_hostposts.py`) → `post_struct`, a list of
+(`data/slot_mapping.py`) turns those into a `Prix` list keyed on the `prix_info` shortnames →
+`build_posts` (`utils/build_hostposts.py`) → `post_struct`, a list of
 `{name, post_text, post_type}` dicts in a **fixed order** the scheduler depends on: 1hr, 10min,
 then alternating go_post/results_post per prix, then event_results. `prepare_post_outputs`
 (`utils/hostpost_exports.py`) optionally runs the edit wizard, hands `post_struct` to
@@ -197,10 +205,10 @@ is what actually gets posted. Nested triple-backticks inside a post will break t
 
 ### Scheduling: two parallel stores
 
-APScheduler holds the timing; `bot.job_stack` (a plain list on the bot, keys `job_name` / `message` /
-`time`) holds the text. The split exists so text stays editable after a job is queued — the fired
-callback `post_message` looks the message up by `job_name` at send time. Both must be kept in sync:
-`schedule_job` appends to the stack, `send_and_pop_message` and `remove_event_jobs` remove from it.
+APScheduler holds the timing; `bot.job_stack` (a list of `QueuedPost`, on the bot) holds the text.
+The split exists so text stays editable after a job is queued — the fired callback `post_message`
+looks the message up by `job_name` at send time. Both must be kept in sync: `schedule_job` appends
+to the stack, `send_and_pop_message` and `remove_event_jobs` remove from it.
 
 Job names are the coupling glue: `f"{start_date:%Y-%m-%d} | {event}_{suffix}"` with suffixes `1hr`,
 `10min`, `Prix#N`, `Prix#NResults`, `FinalResults`, plus `getResults_<event>` and
@@ -225,9 +233,10 @@ and the API resolves that to a row in `users` and writes `events_scheduled.host_
 bot never sees a `users.id`, which is why the commands were ported rather than handed an identity
 endpoint. `/event_setup` (task 19-06) reads the calendar (`GET /v1/events`), an event
 (`GET /v1/events/{id}`), the in-game rotation and lineup offers (`GET /v1/ingame/…`) and the
-lineup catalogue (`GET /v1/lineups`), and writes the scoring and the schedule. Every method
-answers the decoded JSON as sent, datetimes as ISO 8601 strings, typed as the `TypedDict` of the
-response schema it reads (see "Design philosophy"); callers parse what they use.
+lineup catalogue (`GET /v1/lineups`), and writes the scoring and the schedule. Every method's
+return type is the `TypedDict` in `src/api_types.py` of the schema its endpoint answers, so the
+client's signatures are the list of what this bot reads and writes; instants are ISO 8601
+strings, parsed where read.
 
 Deliberate properties, all of them load-bearing:
 

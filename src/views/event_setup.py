@@ -12,19 +12,24 @@ Every handler that asks the API defers first: a hop from the Raspberry Pi to the
 VPS can outrun Discord's three-second interaction window.
 """
 
+from __future__ import annotations
+
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Literal
+from types import CoroutineType
+from typing import Any, Literal, Protocol
 
 import discord
-from discord.ext import commands
 
+from src.api_types import EventDetailResponse, LobbyKind, SlotEntryRequest, SlotResponse
 from src.data.event_post_text import events
-from src.data.slot_mapping import prix_emoji_name, prix_list_from_slots
+from src.data.slot_mapping import Prix, prix_emoji_name, prix_list_from_slots
 from src.error_alerts import send_error_alert
 from src.fzd_api import FzdApiError
+from src.main import HostBot
 from src.utils.hostpost_utils import discord_timestamp
 
 logger = logging.getLogger(__name__)
@@ -36,6 +41,18 @@ logger = logging.getLogger(__name__)
 WIZARD_TIMEOUT_SECONDS = 14 * 60
 
 EventType = Literal["gpmp", "cmp", "race", "tb"]
+# A lobby kind the API takes, or `mixed`: public and private slots in one schedule.
+Lobbies = Literal["public", "private", "mixed"]
+Scoring = Literal["points", "time"]
+
+
+class Handler(Protocol):
+    """What a button does when clicked: the shape discord.py declares for
+    `Item.callback`, which an `async def` taking the interaction has."""
+
+    def __call__(self, interaction: discord.Interaction) -> CoroutineType[Any, Any, None]: ...
+
+
 EVENT_TYPES: dict[EventType, str] = {
     "gpmp": "Grand Prix and Mini Prix",
     "cmp": "Classic Mini Prix",
@@ -44,7 +61,7 @@ EVENT_TYPES: dict[EventType, str] = {
 }
 # How FZD runs each type, not what the API admits: widening one is an edit here
 # and a stage run. Each pair is one button on the type page.
-LOBBIES: dict[EventType, tuple[str, ...]] = {
+LOBBIES: dict[EventType, tuple[Lobbies, ...]] = {
     "gpmp": ("public", "private", "mixed"),
     "cmp": ("private",),
     "race": ("public", "private"),
@@ -82,7 +99,7 @@ class SlotDraft:
 
     name: str
     starts_at: datetime
-    lobby: str
+    lobby: LobbyKind
     mode: str | None = None
     lineup_id: int | None = None
     # The custom emoji's name, or "". Resolved in the guild at render time.
@@ -91,16 +108,27 @@ class SlotDraft:
     # slot offers again: a 99 pick at 22:07 was chosen from the offers at 22:05.
     offered_from: datetime = field(kw_only=True)
 
-    def same_pick(self, other: "SlotDraft") -> bool:
+    def same_pick(self, other: SlotDraft) -> bool:
         return (self.name, self.starts_at, self.lobby) == (other.name, other.starts_at, other.lobby)
 
-    def entry(self) -> dict[str, Any]:
-        """The slot as the schedule write takes it: exactly one of `lineup_id`
-        and `mode`, which the API refuses both or neither of. A mode alone is
-        resolved to what the game offers at the minute, or to the mode's
-        placeholder."""
-        named = {"lineup_id": self.lineup_id} if self.lineup_id is not None else {"mode": self.mode}
-        return {**named, "starts_at": self.starts_at.isoformat(), "lobby": self.lobby}
+    def entry(self) -> SlotEntryRequest:
+        """Exactly one of `lineup_id` and `mode`, which the API refuses both or
+        neither of. A mode alone is resolved to what the game offers at the
+        minute, or to the mode's placeholder."""
+        entry = SlotEntryRequest(starts_at=self.starts_at.isoformat(), lobby=self.lobby)
+        if self.lineup_id is not None:
+            entry["lineup_id"] = self.lineup_id
+        else:
+            entry["mode"] = self.mode
+        return entry
+
+
+@dataclass(frozen=True)
+class League:
+    """A Grand Prix lineup a private lobby can start, from the catalogue."""
+
+    name: str
+    lineup_id: int
 
 
 def parse_instant(value: str) -> datetime:
@@ -127,11 +155,8 @@ def parse_hhmm(reference: datetime, text: str) -> datetime:
     return nearest_instant(reference, hour, minute)
 
 
-def describe_slot(slot: dict[str, Any]) -> str:
-    """A written slot as the API answered it: `20:00 public Grand Prix: Knight League`.
-    `starts_at` and `lobby` are null on a slot entered without them. A slot on
-    its mode's placeholder has no tracks, and its lineup name says only that,
-    so it is shown by the mode alone."""
+def describe_slot(slot: SlotResponse) -> str:
+    """`20:00 public Grand Prix: Knight League`; a placeholder slot by its mode alone."""
     name = slot["mode"]
     if slot["tracks"]:
         name += f": {slot['lineup_name']}"
@@ -142,7 +167,7 @@ def describe_slot(slot: dict[str, Any]) -> str:
 class WizardModal(discord.ui.Modal):
     """A modal whose failures take the wizard's error path, and its alert."""
 
-    def __init__(self, wizard: "EventSetupView", *, title: str) -> None:
+    def __init__(self, wizard: EventSetupView, *, title: str) -> None:
         super().__init__(title=title)
         self.wizard = wizard
 
@@ -153,7 +178,7 @@ class WizardModal(discord.ui.Modal):
 class ExactTimeModal(WizardModal):
     def __init__(
         self,
-        wizard: "EventSetupView",
+        wizard: EventSetupView,
         reference: datetime,
         on_time: Callable[[discord.Interaction, datetime], Awaitable[None]],
     ) -> None:
@@ -180,7 +205,7 @@ class SettingsModal(WizardModal):
     A modal runs nothing until it is submitted, so no field can be disabled by
     another's answer: each says when it applies, and is ignored otherwise."""
 
-    def __init__(self, wizard: "EventSetupView", *, scoring_only: bool) -> None:
+    def __init__(self, wizard: EventSetupView, *, scoring_only: bool) -> None:
         assert wizard.event_type is not None
         super().__init__(wizard, title=f"{EVENT_TYPES[wizard.event_type]}, {wizard.lobbies} lobbies")
 
@@ -244,7 +269,7 @@ class EventSetupView(discord.ui.LayoutView):
     only when the host answered `posting`, and the caller builds the posts.
     """
 
-    def __init__(self, bot: commands.Bot, interaction: discord.Interaction, detail: dict[str, Any]) -> None:
+    def __init__(self, bot: HostBot, interaction: discord.Interaction, detail: EventDetailResponse) -> None:
         super().__init__(timeout=WIZARD_TIMEOUT_SECONDS)
         self.bot = bot
         self.api = bot.api
@@ -252,18 +277,20 @@ class EventSetupView(discord.ui.LayoutView):
         self.last_interaction = interaction
         self.guild_emojis = interaction.guild.emojis if interaction.guild else ()
 
-        self.event_id: int = detail["scheduled_event_id"]
-        self.event_name: str = detail["event"]
+        self.event_id = detail["scheduled_event_id"]
+        self.event_name = detail["event"]
         self.starts_at = parse_instant(detail["starts_at"])
         self.ends_at = parse_instant(detail["ends_at"])
-        self.existing_slots: list[dict[str, Any]] = detail["slots"]
+        self.existing_slots = detail["slots"]
 
         # Settings. Scoring is pre-filled from what the event already has; the
         # typed fields are kept as typed, so a modal that did not validate
         # reopens with the host's input rather than the last good value.
         self.event_type: EventType | None = None
-        self.lobbies: str | None = None
-        self.scoring: str | None = detail["scoring_method"] if detail["scoring_method"] in ("points", "time") else None
+        self.lobbies: Lobbies | None = None
+        self.scoring: Scoring | None = (
+            detail["scoring_method"] if detail["scoring_method"] in ("points", "time") else None
+        )
         self.mulligans: int = detail["scoring"]["num_mulligans"]
         self.machine_mastery: bool = detail["scoring"]["machine_counts_once"]
         self.max_time_loss_cs: int | None = detail["scoring"]["max_time_loss_cs"]
@@ -284,13 +311,13 @@ class EventSetupView(discord.ui.LayoutView):
         # Whether the game offered something at `slot_time` that falls outside
         # the slot's neighbours, as opposed to offering nothing.
         self.offered_outside = False
-        self.private_leagues: list[dict[str, Any]] = []
+        self.private_leagues: list[League] = []
         self.public_entries: list[SlotDraft] = []
         self.public_picks: list[int] = []
 
         # Outcome.
-        self.slots: list[dict[str, Any]] | None = None
-        self.prix_list: list[dict[str, Any]] | None = None
+        self.slots: list[SlotResponse] | None = None
+        self.prix_list: list[Prix] | None = None
         self.autopost: bool | None = None
         self.validate = True
 
@@ -323,10 +350,8 @@ class EventSetupView(discord.ui.LayoutView):
                 f"{self.written()}\n\nThis event setup timed out before the posts were built. "
                 "Run /event_setup again to build them; it replaces the schedule with what you pick."
             )
-        try:
+        with contextlib.suppress(discord.HTTPException):
             await self.last_interaction.edit_original_response(view=self)
-        except discord.HTTPException:
-            pass
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item) -> None:
         await self.fail(interaction, error, where=str(item))
@@ -375,7 +400,7 @@ class EventSetupView(discord.ui.LayoutView):
     def button(
         self,
         label: str,
-        handler: Callable[[discord.Interaction], Awaitable[None]],
+        handler: Handler,
         *,
         style: discord.ButtonStyle = discord.ButtonStyle.secondary,
         emoji: discord.Emoji | str | None = None,
@@ -457,12 +482,14 @@ class EventSetupView(discord.ui.LayoutView):
             box.add_item(discord.ui.TextDisplay(f"⚠️ {self.notice}"))
             self.notice = None
             box.add_item(
-                discord.ui.ActionRow(self.button("Fix settings", self.on_fix_settings, style=discord.ButtonStyle.primary))
+                discord.ui.ActionRow(
+                    self.button("Fix settings", self.on_fix_settings, style=discord.ButtonStyle.primary)
+                )
             )
         box.add_item(discord.ui.Separator())
         box.add_item(discord.ui.ActionRow(self.button("Cancel", self.on_cancel)))
 
-    def type_chooser(self, event_type: EventType, lobby: str) -> Callable[[discord.Interaction], Awaitable[None]]:
+    def type_chooser(self, event_type: EventType, lobby: Lobbies) -> Handler:
         async def choose(interaction: discord.Interaction) -> None:
             self.event_type, self.lobbies = event_type, lobby
             await interaction.response.send_modal(SettingsModal(self, scoring_only=False))
@@ -477,7 +504,7 @@ class EventSetupView(discord.ui.LayoutView):
 
     async def on_settings(self, interaction: discord.Interaction, modal: SettingsModal) -> None:
         if modal.scoring is not None and modal.max_loss is not None:
-            self.scoring = modal.scoring.value
+            self.scoring = "time" if modal.scoring.value == "time" else "points"
             self.max_loss_text = modal.max_loss.value.strip()
         else:
             self.scoring = "points"
@@ -535,15 +562,18 @@ class EventSetupView(discord.ui.LayoutView):
         if self.event_type == "gpmp":
             leagues = await self.api.lineups("GP")
             self.private_leagues = [
-                league
+                League(league["name"], league["lineup_id"])
                 for league in leagues
+                # A league is offered and templated by its name, and `lineups.name` is nullable.
                 # A private lobby cannot start Secret GP, the league with glitch tracks.
-                if not any(track["type"] == "glitch" for track in league["tracks"])
+                if league["name"] is not None and not any(track["type"] == "glitch" for track in league["tracks"])
             ]
         await self.enter_slot()
 
     async def load_public_entries(self) -> None:
-        entries = await self.api.rotation(self.first_start, kind="prix", lookahead_minutes=PUBLIC_PRIX_LOOKAHEAD_MINUTES)
+        entries = await self.api.rotation(
+            self.first_start, kind="prix", lookahead_minutes=PUBLIC_PRIX_LOOKAHEAD_MINUTES
+        )
         self.public_entries = []
         for entry in entries[:PUBLIC_PRIX_SHOWN]:
             # The window containing the first slot opened earlier; the slot
@@ -595,7 +625,7 @@ class EventSetupView(discord.ui.LayoutView):
         at = self.slot_time
         offered: list[SlotDraft] = []
         if self.kind == "race":
-            assert self.lobbies is not None
+            assert self.lobbies in ("public", "private")
             mode = self.slot_mode
             offers = await self.api.lineup_offers(
                 mode, lobby=self.lobbies, now=at, lookahead_minutes=RACE_OFFER_LOOKAHEAD_MINUTES
@@ -638,16 +668,21 @@ class EventSetupView(discord.ui.LayoutView):
                 ]
             offered.append(
                 SlotDraft(
-                    "Mini Prix", at, "private", mode="MP", emoji_name=prix_emoji_name("Mini Prix", None), offered_from=at
+                    "Mini Prix",
+                    at,
+                    "private",
+                    mode="MP",
+                    emoji_name=prix_emoji_name("Mini Prix", None),
+                    offered_from=at,
                 )
             )
             offered += [
                 SlotDraft(
-                    league["name"],
+                    league.name,
                     at,
                     "private",
-                    lineup_id=league["lineup_id"],
-                    emoji_name=prix_emoji_name("Grand Prix", league["name"]),
+                    lineup_id=league.lineup_id,
+                    emoji_name=prix_emoji_name("Grand Prix", league.name),
                     offered_from=at,
                 )
                 for league in self.private_leagues
@@ -679,7 +714,10 @@ class EventSetupView(discord.ui.LayoutView):
             summary.append(f"⚠️ {self.notice}")
             self.notice = None
         box.add_item(
-            discord.ui.Section(discord.ui.TextDisplay("\n".join(summary)), accessory=self.button("Settings", self.on_scoring, emoji="⚙️"))
+            discord.ui.Section(
+                discord.ui.TextDisplay("\n".join(summary)),
+                accessory=self.button("Settings", self.on_scoring, emoji="⚙️"),
+            )
         )
         box.add_item(discord.ui.Separator())
 
@@ -710,7 +748,9 @@ class EventSetupView(discord.ui.LayoutView):
     def build_public_prix(self, box: discord.ui.Container) -> None:
         if not self.public_entries:
             box.add_item(
-                discord.ui.TextDisplay(f"The game runs no prix from {hhmm(self.first_start)} UTC. Choose another first slot time.")
+                discord.ui.TextDisplay(
+                    f"The game runs no prix from {hhmm(self.first_start)} UTC. Choose another first slot time."
+                )
             )
         else:
             box.add_item(discord.ui.TextDisplay("Pick the prixs you want in your schedule"))
@@ -725,9 +765,13 @@ class EventSetupView(discord.ui.LayoutView):
             ]
             for start in range(0, len(buttons), BUTTONS_PER_ROW):
                 box.add_item(discord.ui.ActionRow(*buttons[start : start + BUTTONS_PER_ROW]))
-        box.add_item(discord.ui.ActionRow(self.button("Change start time", self.on_public_first_time, style=discord.ButtonStyle.primary)))
+        box.add_item(
+            discord.ui.ActionRow(
+                self.button("Change start time", self.on_public_first_time, style=discord.ButtonStyle.primary)
+            )
+        )
 
-    def public_toggle(self, index: int) -> Callable[[discord.Interaction], Awaitable[None]]:
+    def public_toggle(self, index: int) -> Handler:
         async def toggle(interaction: discord.Interaction) -> None:
             self.public_picks = sorted(set(self.public_picks) ^ {index})
             self.drafts = [self.public_entries[pick] for pick in self.public_picks]
@@ -784,7 +828,9 @@ class EventSetupView(discord.ui.LayoutView):
                         self.button(
                             label,
                             self.mode_chooser(mode),
-                            style=discord.ButtonStyle.primary if mode == self.race_mode else discord.ButtonStyle.secondary,
+                            style=discord.ButtonStyle.primary
+                            if mode == self.race_mode
+                            else discord.ButtonStyle.secondary,
                         )
                         for mode, label in RACE_MODES.items()
                     )
@@ -842,7 +888,9 @@ class EventSetupView(discord.ui.LayoutView):
                 self.button("◀ Back", self.mover(-1), disabled=self.cursor == 0),
                 self.button("Forward ▶", self.mover(1), disabled=editing is None),
                 self.button("Exact time", self.on_exact_time),
-                self.button("Remove this slot", self.on_remove, style=discord.ButtonStyle.danger, disabled=editing is None),
+                self.button(
+                    "Remove this slot", self.on_remove, style=discord.ButtonStyle.danger, disabled=editing is None
+                ),
             )
         )
 
@@ -854,7 +902,7 @@ class EventSetupView(discord.ui.LayoutView):
             label += " (current)"
         return label[:100]
 
-    def mode_chooser(self, mode: str) -> Callable[[discord.Interaction], Awaitable[None]]:
+    def mode_chooser(self, mode: str) -> Handler:
         async def choose(interaction: discord.Interaction) -> None:
             self.race_mode = mode
             await self.call_then_show(interaction, self.load_candidates)
@@ -876,7 +924,7 @@ class EventSetupView(discord.ui.LayoutView):
                 if entry["mode_short_name"] == mode
             ]
             minutes = [minute for minute in minutes if any(opens <= minute < closes for opens, closes in windows)]
-        assert self.lobbies is not None
+        assert self.lobbies in ("public", "private")
         return [
             SlotDraft(f"{RACE_MODE_NAMES[mode]}: Placeholder", minute, self.lobbies, mode=mode, offered_from=at)
             for minute in minutes
@@ -900,7 +948,7 @@ class EventSetupView(discord.ui.LayoutView):
     async def on_pick_classic(self, interaction: discord.Interaction) -> None:
         await self.put(interaction, self.candidates[0])
 
-    def mover(self, step: int) -> Callable[[discord.Interaction], Awaitable[None]]:
+    def mover(self, step: int) -> Handler:
         async def move(interaction: discord.Interaction) -> None:
             self.cursor += step
             await self.call_then_show(interaction, self.enter_slot)
@@ -997,13 +1045,19 @@ class EventSetupView(discord.ui.LayoutView):
         )
         box.add_item(
             discord.ui.ActionRow(
-                self.button("Autopost, I'll validate results", self.posting_chooser(True, True), style=discord.ButtonStyle.success),
-                self.button("Autopost, skip validation", self.posting_chooser(True, False), style=discord.ButtonStyle.danger),
+                self.button(
+                    "Autopost, I'll validate results",
+                    self.posting_chooser(True, True),
+                    style=discord.ButtonStyle.success,
+                ),
+                self.button(
+                    "Autopost, skip validation", self.posting_chooser(True, False), style=discord.ButtonStyle.danger
+                ),
                 self.button("I'll post myself", self.posting_chooser(False, True)),
             )
         )
 
-    def posting_chooser(self, autopost: bool, validate: bool) -> Callable[[discord.Interaction], Awaitable[None]]:
+    def posting_chooser(self, autopost: bool, validate: bool) -> Handler:
         async def choose(interaction: discord.Interaction) -> None:
             self.autopost = autopost
             self.validate = validate

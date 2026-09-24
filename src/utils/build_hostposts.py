@@ -1,34 +1,35 @@
 '''
-Functions in this module take the following to build posts for regular weekly events:
-- Event name (e.g. "Friday FZD EU")
-- List of dicts containing prix info (e.g. [{"prix": "knight", "time": datetime, "prix_type": "public"}, ...])
-
-
+Builds the posts for a regular weekly event from its name and its `Prix` list
+(see `data/slot_mapping.py`, which builds that from the API's slots).
 '''
-from string import Template
 import random
-from datetime import datetime, timedelta
-from src.utils.hostpost_utils import discord_timestamp, round_to_30_minutes
+from datetime import timedelta
+from typing import TypedDict
+
+from src.data.event_post_text import PrixInfo, clean_driving_list, custom_text, events, prix_info, schedule_line
+from src.data.slot_mapping import Prix
 from src.data.template_mapping import TemplateMap
-from src.data.event_post_text import prix_info, schedule_line, events, custom_text, clean_driving_list
-from src.fzd_db import (
-    get_event_host_id,
-    get_db_connection,
-    get_post_template
-)
+from src.fzd_db import get_db_connection, get_event_host_id, get_post_template
+from src.main import HostBot
+from src.utils.hostpost_utils import discord_timestamp, round_to_30_minutes
 
-async def build_posts(bot, event_name: str,
+
+class Post(TypedDict):
+    """One draft, `"<header>```<body>```"`; the fenced body is what is posted."""
+
+    name: str
+    post_text: str
+    post_type: str
+    """`1hr`, `10min`, `go_post`, `results_post` or `event_results`; the scheduler keys on it."""
+
+
+def prix_template(shortname: str) -> PrixInfo:
+    return next(item for item in prix_info if item["shortname"] == shortname)
+
+
+async def build_posts(bot: HostBot, event_name: str,
                       scheduled_event_id: int,
-                      prix_list: list[dict[str, any]]):
-    # Format of prix_list (see data/slot_mapping.py, which builds it from the API's slots):
-    #   [
-    #   {prix: value (str, a prix_info shortname)
-    #   time: value (datetime)
-    #   prix_type: value (str, e.g. "public" or "private")
-    #   lineup: value (list[str] of track names, empty unless the post prints them)}
-    #   ...
-    #   ]
-
+                      prix_list: list[Prix]) -> list[Post]:
     # Create mapping for event
     map = TemplateMap()
 
@@ -36,15 +37,12 @@ async def build_posts(bot, event_name: str,
     tickets_needed = 0
     for prix in prix_list:
         if prix["prix_type"] == "public":
-            tickets_needed += next((item for item in prix_info if item["shortname"] == prix["prix"]), None)["tickets"]
+            tickets_needed += prix_template(prix["prix"])["tickets"]
     print(f"Tickets needed for {event_name}: {tickets_needed}")
 
     # Check for need for clean driving message
-    for prix in prix_list:
-        if any(item.get("prix") in clean_driving_list for item in prix_list):
-           map.custom_text = [item["clean_driving"] for item in custom_text][0]
-        else:
-            map.custom_text = ""
+    if any(prix["prix"] in clean_driving_list for prix in prix_list):
+        map.custom_text = next(item["clean_driving"] for item in custom_text)
 
     # Build string mapping
     map.event_name = event_name
@@ -54,8 +52,8 @@ async def build_posts(bot, event_name: str,
     map.tickets_number = tickets_needed
     if tickets_needed == 1:
         map.tickets_emoji = "<:Ticket:1194747589610967131>"
-        map.tickets_word = "ticket" 
-    else: 
+        map.tickets_word = "ticket"
+    else:
         map.tickets_emoji = "<:Tickets:1218943498338697256>"
         map.tickets_word = "tickets"
 
@@ -73,12 +71,12 @@ async def build_posts(bot, event_name: str,
     hour_post = rf"One Hour Post```{hour_template.format(**map.mapping).replace(r"\n", "\n")}```"
     ten_min_post = rf"10 Minute Post```{ten_min_template.format(**map.mapping).replace(r"\n", "\n")}```"
     event_results_post = rf"Results Post```{event_results_template.format(**map.mapping).replace(r"\n", "\n")}```"
-    
+
     # Build prix-start and prix-results posts
     go_posts, results_posts = build_gp_posts(event_name, prix_list)
-    
+
     # Build post structure
-    post_struct = []
+    post_struct: list[Post] = []
     post_struct.append({
         "name": "1 Hour Post",
         "post_text": hour_post,
@@ -113,11 +111,11 @@ async def build_posts(bot, event_name: str,
     # return [hour_post], go_posts, results_posts, [event_results_post]
     return post_struct
 
-def build_schedule(prix_list: list[dict[str, any]]) -> str:
+def build_schedule(prix_list: list[Prix]) -> str:
     # Build the multi-line schedule text for the event post based on the prix list and the schedule_line templates.
     schedule_text = ""
     for prix in prix_list:
-        prix_dict = next((item for item in prix_info if item["shortname"] == prix["prix"]), None)
+        prix_dict = prix_template(prix["prix"])
         if prix["lineup"]:
             schedule_text += schedule_line["private_mp_lineup"].format(
                     discord_timestamp(prix["time"], "short"), prix["lineup"][0].upper(), prix["lineup"][1].upper(), prix["lineup"][2].upper())
@@ -141,26 +139,21 @@ def build_schedule(prix_list: list[dict[str, any]]) -> str:
     return schedule_text
 
 
-def build_gp_posts(event_name: str, prix_list: list[dict[str, any]]) -> list[str]:
-    # Build the posts that will be posted at the start and end of each GP. This will be 
+def build_gp_posts(event_name: str, prix_list: list[Prix]) -> tuple[list[str], list[str]]:
+    # Build the posts that will be posted at the start and end of each GP. This will be
     # based on the prix type and the prix info.
     go_posts = []
     results_posts = []
-    for index, prix in enumerate(prix_list):
-        prix_dict = next((item for item in prix_info if item["shortname"] == prix["prix"]), None)
-        score_channel = next((item for item in events if item["fullname"] == event_name), None)["score_channel"]
-        
+    for prix in prix_list:
+        prix_dict = prix_template(prix["prix"])
+        score_channel = next(item for item in events if item["fullname"] == event_name)["score_channel"]
+
         # Determine ticket text based on number of tickets needed for the prix.
-        if prix_dict['tickets'] == 1:
-            ticket_text = "<:Ticket:1194747589610967131>"
-        else:
-            ticket_text = "<:Tickets:1218943498338697256>"
-        
+        ticket_text = "<:Ticket:1194747589610967131>" if prix_dict["tickets"] == 1 else "<:Tickets:1218943498338697256>"
+
         # Determine role called based on mode ("99" or "classic")
-        if prix_dict["mode"] == "classic":
-            role_ping = "<@&1343646386981437561>" # "@Classic Events" role
-        else:
-            role_ping = "<@&1197169889417371689>" # "@Events" role 
+        # "@Classic Events" for a classic prix, "@Events" for the rest.
+        role_ping = "<@&1343646386981437561>" if prix_dict["mode"] == "classic" else "<@&1197169889417371689>"
 
         # Build prix start post
         if prix["lineup"]:
@@ -179,7 +172,7 @@ def build_gp_posts(event_name: str, prix_list: list[dict[str, any]]) -> list[str
             scoreboard_close_time = round_to_30_minutes(prix["time"] + timedelta(minutes=60)) - timedelta(minutes=1)
             scoring_text = f"That marks the end of {event_name}!\n\nScoreboard closes {discord_timestamp(scoreboard_close_time, 'relative')}, at {discord_timestamp(scoreboard_close_time, 'short')}, so quickly go to {score_channel} to submit your scores!```"
         else:
-            next_prix_dict = next((item for item in prix_info if item["shortname"] == prix_list[prix_list.index(prix) + 1]["prix"]), None)
+            next_prix_dict = prix_template(prix_list[prix_list.index(prix) + 1]["prix"])
             scoring_text = f"Head over to {score_channel} to submit your scores!\nThe {prix_list[prix_list.index(prix) + 1]['prix_type'].capitalize()} {next_prix_dict['emoji']} {next_prix_dict['mirror_emoji']} {next_prix_dict['fullname']} will start {discord_timestamp(prix_list[prix_list.index(prix) + 1]['time'], 'relative')}!```"
         results_posts.append(f"Prix #{prix_list.index(prix) + 1} Results```# <:1st:1201576405339754546> Congratulations @[Player] for winning the {prix['prix_type'].capitalize()} {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']}!\n{scoring_text}")
     return go_posts, results_posts

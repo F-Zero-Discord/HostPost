@@ -8,12 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env", 
-        env_file_encoding="utf-8",
-        extra="ignore",
-        case_sensitive=False
-        )
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False)
 
     discord_token: str
     server_id: int
@@ -36,21 +31,18 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    event_announce_channel: int | None
-    engage_channel: int | None
-    validation_channel: int | None
+    event_announce_channel: int
+    engage_channel: int
+    validation_channel: int
     error_alert_channel_id: int | None
-    test_flag: int | None = 0
+    test_flag: int = 0
     hosting_schedule_channel: int | None
     hosting_schedule_message_id: int | None
-
 
     # An empty value in .env is None, not a startup failure: alerts are then
     # off, and the hosting board says it is not configured when a host command
     # would refresh it. The other settings stay required.
-    @field_validator(
-        "error_alert_channel_id", "hosting_schedule_channel", "hosting_schedule_message_id", mode="before"
-    )
+    @field_validator("error_alert_channel_id", "hosting_schedule_channel", "hosting_schedule_message_id", mode="before")
     @classmethod
     def empty_to_none(cls, value: object) -> object:
         if value == "":
@@ -65,17 +57,6 @@ class Settings(BaseSettings):
         if normalized not in valid_levels:
             raise ValueError(f"Invalid log level: {value}")
         return normalized
-
-    @property
-    def db_config(self) -> dict[str, object]:
-        return {
-            "user": self.db_user,
-            "password": self.db_password,
-            "host": self.db_host,
-            "db": self.db_name,
-            "port": self.db_port,
-            "autocommit": False,
-        }
 
 
 _env_file = ".env"

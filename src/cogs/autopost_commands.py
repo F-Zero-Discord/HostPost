@@ -4,27 +4,33 @@ Module for Class PostScheduler.
 - Contains slash commands for viewing and cancelling scheduled posts.
 '''
 
+import asyncio
+
 import discord
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord import app_commands
 from discord.ext import commands
-import asyncio
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from src.settings import get_settings
-from src.utils.hostpost_utils import discord_timestamp
-from src.utils.autoposts_utils import build_autopost_dict, clean_post
+
 from src.data.event_post_text import access_roles
-from src.views.hostpost_views import EditTemplateWizardView
+from src.data.slot_mapping import Prix
 from src.fzd_db import (
-    get_db_connection, 
-    get_scheduled_event_id, 
-    get_event_scores,
+    HostInfo,
+    get_db_connection,
     get_event_host_id,
-    get_host_info
+    get_event_scores,
+    get_host_info,
+    get_scheduled_event_id,
 )
+from src.main import HostBot
+from src.settings import get_settings
+from src.utils.autoposts_utils import Autopost, build_autopost_dict
+from src.utils.build_hostposts import Post
+from src.utils.hostpost_utils import discord_timestamp
+from src.views.hostpost_views import EditTemplateWizardView
 
 
 class PostScheduler(commands.Cog):
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: HostBot) -> None:
         self.bot = bot
         self.scheduler = bot.scheduler
         self.interaction: discord.Interaction | None = None
@@ -44,7 +50,7 @@ class PostScheduler(commands.Cog):
 
         # Return up to 25 results (25=discord limit)
         return [app_commands.Choice(name=autopost_event, value=f"{autopost_event}") for autopost_event in options[:25]]
-    
+
 
     async def job_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         job_list = self.scheduler.get_jobs()
@@ -65,7 +71,7 @@ class PostScheduler(commands.Cog):
         job_list = self.scheduler.get_jobs()
         job_name_list = []
         for job in job_list:
-            if (job.next_run_time == None) and ("FinalResults" not in job.id):
+            if (job.next_run_time is None) and ("FinalResults" not in job.id):
                 job_name_list.append(job.id)
 
         if not job_name_list:
@@ -79,12 +85,12 @@ class PostScheduler(commands.Cog):
 
 
     async def add_user_to_message(
-            self, 
-            interaction: discord.Interaction, 
-            job_name: str, 
+            self,
+            interaction: discord.Interaction,
+            job_name: str,
             user_string: str
             ):
-        
+
         # Find job_name in job stack
         if any(job.get("job_name") == job_name for job in self.bot.job_stack):
             message = [job["message"] for job in self.bot.job_stack if job["job_name"] == job_name]
@@ -99,7 +105,7 @@ class PostScheduler(commands.Cog):
             else:
                 # await interaction.response.send_message(f"Substring {substring} not found in message. Message unchanged.")
                 print(f'Warning: "{substring}" not found in message. Message unchanged.')
-    
+
 
     def events_job_list(self, scheduler: AsyncIOScheduler) -> list[dict]:
         ''' Looks at all the jobs and returns the event names associated with the existing jobs.
@@ -107,7 +113,7 @@ class PostScheduler(commands.Cog):
         job_list = scheduler.get_jobs()
         event_list: list[dict] = []
         for job in job_list:
-            # Extract event name by removing the last part after the final underscore in the job name. 
+            # Extract event name by removing the last part after the final underscore in the job name.
             # This relies on the job naming convention used in build_autopost_dict.
             event_name: str = job.id.rsplit("_",1)[0]
             # Don't include the job that calls the user to validate the results
@@ -120,12 +126,12 @@ class PostScheduler(commands.Cog):
                         if event_name == event_dict["event name"]:
                             event_dict["count"] += 1
         return event_list
-    
+
 
     def remove_event_jobs(self, event_name: str):
-        ''' Removes jobs associated with event "event_name" from both scheduler and 
+        ''' Removes jobs associated with event "event_name" from both scheduler and
             self.bot.job_stack.
-        '''  
+        '''
         job_list = self.scheduler.get_jobs()
         for job in job_list:
             if event_name in job.id:
@@ -142,17 +148,17 @@ class PostScheduler(commands.Cog):
         try:
             # 1. Send the message
             await channel.send(message)
-            
+
             # 2. Remove job information from the stack
-            self.bot.job_stack = [job for job in self.bot.job_stack if job.get("job_name") != job_name]  
-            
+            self.bot.job_stack = [job for job in self.bot.job_stack if job.get("job_name") != job_name]
+
         except Exception as e:
             # If error occurs, the item stays in the stack
             print(f"Failed to send scheduled message. Stack preserved. Error: {e}")
 
 
     def post_message(self, job_name: str, channel_id: int) -> None:
-        ''' The method triggered when an event runs. Pulls the message from the 
+        ''' The method triggered when an event runs. Pulls the message from the
             job stack (self.bot.job.stack). This allows for the user to modify the
             message after the job has been queued.
         '''
@@ -164,25 +170,20 @@ class PostScheduler(commands.Cog):
             asyncio.run_coroutine_threadsafe(
                 self.send_and_pop_message(channel, job_name, message[0]),
                 self.bot.loop
-            )  
+            )
         else:
-            raise f"Error: job {job_name} is not in the job stack and so cannot be executed."
-        
+            raise RuntimeError(f"Error: job {job_name} is not in the job stack and so cannot be executed.")
 
-    async def schedule_job(self, post_job: dict) -> None:
-        # post_job is a dict with keys 
-        # "job_name" (str), 
-        # "time" (datetime), 
-        # "text" (str), and 
-        # "channel" (discord.Object).
-        # The act of scheduling is to add the job to the job stack ("self.bot.job_stack"). 
-        # The job name and time will be added to the job and the message ("text") will be 
+
+    async def schedule_job(self, post_job: Autopost) -> None:
+        # The act of scheduling is to add the job to the job stack ("self.bot.job_stack").
+        # The job name and time will be added to the job and the message ("text") will be
         # added to the job stack to allow for modification later.
         self.bot.job_stack.append({
-            "job_name": post_job["job_name"], 
-            "message": post_job["text"], 
+            "job_name": post_job["job_name"],
+            "message": post_job["text"],
             "time": post_job["time"]})
-         
+
         self.scheduler.add_job(
             self.post_message,
             #trigger='date',
@@ -192,18 +193,18 @@ class PostScheduler(commands.Cog):
             max_instances=1,
             args=[post_job['job_name'], post_job['channel'].id]
         )
-        if post_job['pause'] == True:
+        if post_job['pause']:
             self.scheduler.pause_job(post_job['job_name'])
 
 
-    async def prepare_results_post(self, 
-                                   interaction: discord.Interaction, 
-                                   event_name: str, 
-                                   job_name: str, 
+    async def prepare_results_post(self,
+                                   interaction: discord.Interaction,
+                                   event_name: str,
+                                   job_name: str,
                                    channel_id: int,
                                    validate: bool
                                    ):
-        ''' Takes database scores and updates the event results post with the 
+        ''' Takes database scores and updates the event results post with the
             top three scores and the users associated with them. Also provides
             direction to the user to either update the post (/edit_)
         '''
@@ -213,38 +214,38 @@ class PostScheduler(commands.Cog):
             event_id = await get_scheduled_event_id(db, event_name) # returns a dict
             # Get scores from database
         async with get_db_connection(self.bot.db_pool) as db:
-            scores_dict = await get_event_scores(db, str(event_id))
-        # scores_dict has the keys "name", "user_id", "discord_name", and "score"
+            scores_dict = await get_event_scores(db, event_id)
 
         # Edit event_results post with final scores
-            # Results placeholder strings are @[first], @[second], and @[third] for the 
-            # top level and @(first). @(second), and @(third). Inline points placeholders 
+            # Results placeholder strings are @[first], @[second], and @[third] for the
+            # top level and @(first). @(second), and @(third). Inline points placeholders
             # are represented by [firstpoints], [secondpoints], and [thirdpoints].
         message = [job["message"] for job in self.bot.job_stack if job["job_name"] == job_name]
         results_message = message[0]
+        guild = interaction.guild
+        assert guild is not None
             # Make replacements
             # First Place
-        if scores_dict:
-            if len(scores_dict) >= 3:
-                member = discord.utils.get(interaction.guild.members, name=scores_dict[0]["discord_name"])
+        if scores_dict and len(scores_dict) >= 3:
+                member = discord.utils.get(guild.members, name=scores_dict[0]["discord_name"])
                 if not member:
                     results_message = results_message.replace("@[first]", scores_dict[0]["name"])
                 else:
                     results_message = results_message.replace("@[first]", member.mention)
                 results_message = results_message.replace("@(first)", scores_dict[0]["name"])
                 results_message = results_message.replace("[firstpoints]", f"{int(scores_dict[0]["score"]):,}")
-                
+
                     # Second Place
-                member = discord.utils.get(interaction.guild.members, name=scores_dict[1]["discord_name"])
+                member = discord.utils.get(guild.members, name=scores_dict[1]["discord_name"])
                 if not member:
                     results_message = results_message.replace("@[second]", scores_dict[1]["name"])
                 else:
                     results_message = results_message.replace("@[second]", member.mention)
                 results_message = results_message.replace("@(second)", scores_dict[1]["name"])
                 results_message = results_message.replace("[secondpoints]", f"{int(scores_dict[1]["score"]):,}")
-                
+
                     # Third Place
-                member = discord.utils.get(interaction.guild.members, name=scores_dict[2]["discord_name"])
+                member = discord.utils.get(guild.members, name=scores_dict[2]["discord_name"])
                 if not member:
                     results_message = results_message.replace("@[third]", scores_dict[2]["name"])
                 else:
@@ -258,13 +259,11 @@ class PostScheduler(commands.Cog):
         if validate:
             # Post the event_results post in #playground with request to validate
             channel = self.bot.get_channel(self.validation_channel_id)
+            assert isinstance(channel, discord.TextChannel)
             #await channel.send(clean_post(results_message), allowed_mentions=discord.AllowedMentions.none())
             await channel.send(results_message, allowed_mentions=discord.AllowedMentions.none())
-            host = None # Enter command to get host's discord.Member.mention here. Blank string until implemented.
-            if not host == None:
-                ping = host.mention
-            else:
-                ping = ""
+            # No lookup of the host's member yet, so nobody is pinged.
+            ping = ""
             validation_directions = f"""## {ping} Review the above {event_name} Results post and either\n\
 - Approve immediate posting using the `/validate_results` command\n\
 - Edit the post using `/edit_pending_autopost` and then validate using `/validate_results`"""
@@ -272,26 +271,28 @@ class PostScheduler(commands.Cog):
         else:
             # Post the event_results post directly to event result channel
             channel = self.bot.get_channel(self.announce_channel_id)
+            assert isinstance(channel, discord.TextChannel)
             #await channel.send(clean_post(results_message))
             await channel.send(results_message)
             await asyncio.sleep(1) # sleep to ensure results post made before job removed.
             self.remove_event_jobs(event_name)
 
 
-    async def change_name_and_pfp(self, interaction: discord.Interaction, 
-                                  host_info: dict[str]):
+    async def change_name_and_pfp(self, interaction: discord.Interaction,
+                                  host_info: HostInfo):
         # new_pfp = discord.File(fp=f"images/{host_info["bot_pfp_filename"]}",filename=host_info["bot_pfp_filename"])
         with open(f"images/{host_info["bot_pfp_filename"]}", "rb") as image_file:
             new_pfp = image_file.read()
+        assert interaction.guild is not None and self.bot.user is not None
         await interaction.guild.me.edit(nick=host_info["bot_display_name"])
         await self.bot.user.edit(avatar=new_pfp)
 
 
-    async def post_scheduler(self, 
-                             interaction: discord.Interaction, 
-                             event: str, 
-                             post_struct: list[dict], 
-                             prix_info: list[dict],
+    async def post_scheduler(self,
+                             interaction: discord.Interaction,
+                             event: str,
+                             post_struct: list[Post],
+                             prix_info: list[Prix],
                              validate: bool
                              ):
         # Entry point for scheduling autoposts for an event from hostpost_commands.py.
@@ -334,7 +335,7 @@ class PostScheduler(commands.Cog):
         for index, post in enumerate(autoposts):
             print(f"Scheduling post #{index+1} for {event} named {post['job_name']}")
             await self.schedule_job(post)
-        
+
         # Add job to pull scores from database and edit event results post
         self.scheduler.add_job(
             self.prepare_results_post,
@@ -380,7 +381,7 @@ class PostScheduler(commands.Cog):
         else:
             output_text = "Current scheduled posts:\n"
             for job in job_list:
-                if job.next_run_time == None:
+                if job.next_run_time is None:
                     output_text += f"{job.id}: paused\n"
                 else:
                     output_text += f"{job.id}: Scheduled for {discord_timestamp(job.next_run_time, "short")}\n"
@@ -423,26 +424,26 @@ class PostScheduler(commands.Cog):
     @app_commands.command(name="post_prix_winner", description="Select user who won prix and post result.")
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def post_prix_winner(
-        self, 
-        interaction: discord.Interaction, 
-        job_name: str, 
+        self,
+        interaction: discord.Interaction,
+        job_name: str,
         winner_1: discord.Member | None = None,
         winner_2: discord.Member | None = None,
         winner_string: str | None = None
         ):
         ''' Accept one or more winners (two can be mentions, the third would be a string) and add them to
-            the prix results post. All three winner parameters are optional, as the winner may be a 
+            the prix results post. All three winner parameters are optional, as the winner may be a
             discord.Member mention or a plain old string.
         '''
         # Given that all three user parameters are optional, check to ensure at least one has data.
         if (not winner_1) and (not winner_2) and (not winner_string):
             await interaction.response.send_message(
-                f"You must submit one of the optional winner parameters. No action taken", 
+                "You must submit one of the optional winner parameters. No action taken",
                 ephemeral=True
                 )
             return
         else:
-            winner_concat = str()
+            winner_concat = ""
             if winner_1:
                 winner_concat += f"{winner_1.mention}"
                 if winner_2:
@@ -457,7 +458,7 @@ class PostScheduler(commands.Cog):
                 winner_concat += f"{winner_string}"
             await self.add_user_to_message(interaction, job_name, winner_concat)
             self.scheduler.resume_job(job_name)
-            await interaction.response.send_message(f"We have a winner!")
+            await interaction.response.send_message("We have a winner!")
 
 
     @app_commands.command(name="edit_pending_autopost", description="Edit an event post.")
@@ -469,8 +470,7 @@ class PostScheduler(commands.Cog):
         short_jobname = job_name.rsplit("_",1)[1]
         # Note template wizard view input requires list[dict]
         view = EditTemplateWizardView([{"name": short_jobname, "post_text": message[0], "post_type": ""}])
-        next_template = message[0]
-        view.edit_button.label = f"Edit Post"
+        view.edit_button.label = "Edit Post"
         status_msg = f"## Modify {job_name} Message?"
         await interaction.response.send_message(content=status_msg, view=view)
         await view.wait()
@@ -493,13 +493,14 @@ class PostScheduler(commands.Cog):
                 await asyncio.sleep(1) # sleep to ensure results post made before job removed.
                 self.remove_event_jobs(event_name)
                 await interaction.response.send_message(f"Results posted. {event_name} has concluded.")
-            
+
 
     @app_commands.command(name="push_job", description="Push a job. Mostly for testing.")
     @discord.app_commands.checks.has_any_role(*access_roles)
     async def push_job(self, interaction:discord.Interaction, job_name: str):
         job = self.scheduler.get_job(job_name)
-        if job.next_run_time == None:
+        assert job is not None
+        if job.next_run_time is None:
             self.scheduler.resume_job(job_name)
         else:
             # if job not paused, pause to clear out the trigger and trigger immediately with resume_job
@@ -507,7 +508,7 @@ class PostScheduler(commands.Cog):
             self.scheduler.resume_job(job_name)
         # Remove job information from the stack
         await asyncio.sleep(2) # sleep to ensure post made before job removed.
-        self.bot.job_stack = [job for job in self.bot.job_stack if job.get("job_name") != job_name] 
+        self.bot.job_stack = [job for job in self.bot.job_stack if job.get("job_name") != job_name]
         await interaction.response.send_message(f"{job_name} pushed.")
 
 
@@ -526,7 +527,8 @@ class PostScheduler(commands.Cog):
                 "This command is Circuit Crew only. Hit up a mod if you want to join Circuit Crew.",
                 ephemeral=True
                 )
-        else: raise error
+        else:
+            raise error
 
     async def cog_load(self):
             self.cancel_event_posts.autocomplete("event_name")(self.eventpost_autocomplete)
@@ -535,7 +537,6 @@ class PostScheduler(commands.Cog):
             self.validate_results.autocomplete("event_name")(self.eventpost_autocomplete)
             self.push_job.autocomplete("job_name")(self.job_autocomplete)
 
-async def setup(bot: commands.Bot):
+async def setup(bot: HostBot):
     server_id = get_settings().server_id
-    GUILD_ID = discord.Object(id=server_id)
-    await bot.add_cog(PostScheduler(bot), guild=GUILD_ID)
+    await bot.add_cog(PostScheduler(bot), guild=discord.Object(id=server_id))

@@ -1,30 +1,32 @@
 import io
-import discord
-from discord.ext import commands
 from datetime import datetime
-from src.views.hostpost_views import EditTemplateWizardView
-from src.cogs.autopost_commands import PostScheduler
-from src.utils.autoposts_utils import clean_post, insert_new_message_contents
-from src.data.event_post_text import automatable_posts
 
+import discord
+
+from src.cogs.autopost_commands import PostScheduler
+from src.data.event_post_text import automatable_posts
+from src.data.slot_mapping import Prix
+from src.main import HostBot
+from src.utils.build_hostposts import Post
+from src.views.hostpost_views import EditTemplateWizardView
 
 ''' Output for Draft Posts '''
 async def post_draft_posts_to_discord(
-    interaction: discord.Interaction, 
-    post_struct: list[dict]
+    interaction: discord.Interaction,
+    post_struct: list[Post]
     ):
     for post in post_struct:
         await interaction.followup.send(post["post_text"], ephemeral=False)
 
 async def post_post_textfile(
-    interaction: discord.Interaction, 
-    event: str, 
-    event_start_time: datetime, 
-    # hour_post: list[str], 
-    # go_posts: list[str], 
-    # results_posts: list[str], 
+    interaction: discord.Interaction,
+    event: str,
+    event_start_time: datetime,
+    # hour_post: list[str],
+    # go_posts: list[str],
+    # results_posts: list[str],
     # event_results_post: list[str]
-    post_struct: list[dict]
+    post_struct: list[Post]
     ):
     # Create the large string object for writing to file.
     post_text = ""
@@ -32,25 +34,20 @@ async def post_post_textfile(
         post_text += post["post_text"]
         if index != len(post_struct):
             post_text += "\n\n"
-    
+
     ''' Write to text file '''
     filename = event + "_" + event_start_time.strftime("%Y-%m-%d %H:%M:%S") + "_posts.txt"
     # Convert text into a byte stream
     buffer = io.BytesIO(post_text.encode('utf-8'))
     # Send it directly
     await interaction.followup.send(
-        f"Posts written to attached file {filename} for your records.", 
+        f"Posts written to attached file {filename} for your records.",
         file=discord.File(fp=buffer, filename=filename)
         )
 
 
-async def edit_posts(interaction: discord.Interaction, post_struct: list[dict]) -> list[dict]:
-    # post_struct schema:
-    #   name: str
-    #   post_text: str
-    #   post_type: str enum("1hr", "10min", "go_post", "results_post", "event_results")
-
-    drafts = []
+async def edit_posts(interaction: discord.Interaction, post_struct: list[Post]) -> list[Post]:
+    drafts: list[Post] = []
     for post in post_struct:
         # Allow for editing of the 1hr and 10min posts priot to scheduling
         if (post["post_type"] in automatable_posts) and (post["post_type"] != "go_post"):
@@ -79,11 +76,11 @@ async def edit_posts(interaction: discord.Interaction, post_struct: list[dict]) 
 
 
 async def prepare_post_outputs(
-    bot: commands.Bot,
+    bot: HostBot,
     interaction: discord.Interaction,
     event: str,
-    post_struct: list[dict],
-    event_prix_info: list[dict],
+    post_struct: list[Post],
+    event_prix_info: list[Prix],
     autopost: bool,
     validate: bool
     ) -> None:

@@ -1,18 +1,29 @@
 '''
 Autopost logic
 '''
-import re
-import discord
-from datetime import datetime, timezone, timedelta
-from src.settings import get_settings
-from src.utils.build_hostposts import round_to_30_minutes
+from datetime import UTC, datetime, timedelta
+from typing import TypedDict
 
+import discord
+
+from src.data.slot_mapping import Prix
+from src.settings import get_settings
+from src.utils.build_hostposts import Post
+from src.utils.hostpost_utils import round_to_30_minutes
+
+
+class Autopost(TypedDict):
+    """One post as `PostScheduler.schedule_job` queues it."""
+
+    job_name: str
+    time: datetime
+    text: str
+    channel: discord.Object
+    pause: bool
+    """Scheduled paused, to be resumed by a command: prix results and the final results."""
 
 ''' Global Test Variables '''
-if int(get_settings().test_flag) == 1:
-    test_flag = True
-else:
-    test_flag = False
+test_flag = get_settings().test_flag == 1
 test_interval = 30 # seconds
 
 
@@ -22,22 +33,8 @@ def clean_post(post: str) -> str:
     end = post.find("```", start)
     return post[start:end].strip()
 
-def insert_new_message_contents(post:str, new_content: str) -> str:
-    if post.count("```") > 2:
-        print("Backtick blocks (```) are not allowed within posts/.")
-        return
-    else:
-        start_str = r"\```"
-        end_str = r"\```"
-        pattern = f"(?<={start_str}).*?(?={end_str})"
-        return re.sub(pattern, new_content, post)
-
-
-def build_autopost_dict(event: str, post_struct: list[dict], prix_info: list[dict]) -> list[dict]:
-    # 
-    # prix_info is a list of dicts with keys "prix" (str), "time" (datetime), and "prix_type" ("public"/"private").
-    
-    # Identify whether we are in test mode or not. If in test mode, all posts will be scheduled to be posted 
+def build_autopost_dict(event: str, post_struct: list[Post], prix_info: list[Prix]) -> list[Autopost]:
+    # Identify whether we are in test mode or not. If in test mode, all posts will be scheduled to be posted
     # test_interval seconds apart starting from now for testing purposes.
     if test_flag:
         print("Test mode is ON.")
@@ -48,10 +45,10 @@ def build_autopost_dict(event: str, post_struct: list[dict], prix_info: list[dic
     other_post_channel = discord.Object(id=int(settings.engage_channel))
     print(f"hour_post_channel: {hour_post_channel}")
 
-    autoposts: list[dict] = []
+    autoposts: list[Autopost] = []
     start_time = prix_info[0]['time']
     job_name_template = f"{start_time.strftime('%Y-%m-%d')} | {event}_"
-    
+
     # 1 hour post
     autoposts.append(
         {'job_name': f"{job_name_template}1hr",
@@ -102,22 +99,22 @@ def build_autopost_dict(event: str, post_struct: list[dict], prix_info: list[dic
                     'pause': True
                     })
             case _:
-                raise "Encountered unexpected post_type when building autoposts."
-            
+                raise RuntimeError("Encountered unexpected post_type when building autoposts.")
+
     # Add autopost for "event_result" post
     autoposts.append(
         {'job_name': f"{job_name_template}FinalResults",
          # round to nearest 30 minutes and subtract 1 minute to get scoreboard close time
-        'time': round_to_30_minutes(prix["time"] + timedelta(minutes=60)) - timedelta(minutes=1),
+        'time': round_to_30_minutes(prix_info[-1]["time"] + timedelta(minutes=60)) - timedelta(minutes=1),
         'text': clean_post(post_struct[-1]["post_text"]),
         'channel': hour_post_channel,
         'pause': True
         })
-            
+
 
     if test_flag:
         # Set all post times to be test_interval seconds apart starting from now for testing purposes.
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         for index, post in enumerate(autoposts):
             # Comment the line below out to test using normal timings but no pings
             post['time'] = start_time + timedelta(seconds=test_interval * (index + 1))

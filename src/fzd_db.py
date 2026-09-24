@@ -1,19 +1,22 @@
 """
-Contains database commands for accessing event information. Basic functionality 
+Contains database commands for accessing event information. Basic functionality
 taken from Nightmare's fzd_bot.
 """
+
 import logging
-from typing import Literal
-import aiomysql
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from typing import Any, Literal, TypedDict
+
+import aiomysql
 
 from src.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-async def _safe_rollback(conn, source: str = "unknown") -> None:
+async def _safe_rollback(conn: aiomysql.Connection | None, source: str = "unknown") -> None:
     """Rollback only when possible; never mask the original exception."""
     if not conn or getattr(conn, "closed", True):
         return
@@ -23,18 +26,20 @@ async def _safe_rollback(conn, source: str = "unknown") -> None:
         logger.warning(f"[DB] Rollback skipped ({source}): {rollback_error}")
 
 
-async def init_db_pool():
-    _connection_pool = None
+async def init_db_pool() -> aiomysql.Pool:
     settings = get_settings()
-
-    POOL_SIZE = 16
-    if _connection_pool is None:
-        _connection_pool = await aiomysql.create_pool(
-            minsize=1, maxsize=POOL_SIZE,
-            **settings.db_config
-        )
-        print("✅ Database pool created!")
-    return _connection_pool
+    pool = await aiomysql.create_pool(
+        minsize=1,
+        maxsize=16,
+        user=settings.db_user,
+        password=settings.db_password,
+        host=settings.db_host,
+        db=settings.db_name,
+        port=settings.db_port,
+        autocommit=False,
+    )
+    print("✅ Database pool created!")
+    return pool
 
 
 async def get_connection_from_pool(connection_pool: aiomysql.Pool):
@@ -47,7 +52,6 @@ async def get_connection_from_pool(connection_pool: aiomysql.Pool):
     conn = None
     if connection_pool is None:
         raise RuntimeError("Database pool is not initialized")
-    
 
     try:
         conn = await connection_pool.acquire()
@@ -61,6 +65,7 @@ async def get_connection_from_pool(connection_pool: aiomysql.Pool):
         raise
     return conn
 
+
 @asynccontextmanager
 async def get_db_connection(connection_pool: aiomysql.Pool):
     """
@@ -70,7 +75,7 @@ async def get_db_connection(connection_pool: aiomysql.Pool):
     conn = None
     try:
         conn = await get_connection_from_pool(connection_pool)
-         # Test connection quickly (cheap ping)
+        # Test connection quickly (cheap ping)
         # conn.ping(reconnect=True, attempts=1, delay=0)
 
         yield conn  # hand off to the calling code
@@ -82,32 +87,32 @@ async def get_db_connection(connection_pool: aiomysql.Pool):
 
     finally:
         if conn:
-            connection_pool.release(conn) #release_connection(conn)
+            connection_pool.release(conn)  # release_connection(conn)
 
-async def execute_query(conn, query, params=None, fetch="all", isProc:bool = False):
-    """
-    Safely executes an SQL query with rollback on error.
-    :conn: DB connection object
-    :query: SQL query string
-    :params: Optional tuple/list of parameters
-    :fetch: "all", "one", or None (for INSERT/UPDATE/DELETE)
-    :return: Query result or None if no result
-    """
-    cursor=None
+
+async def execute_query(
+    conn: aiomysql.Connection,
+    query: str,
+    params: Sequence[object] | None = None,
+    fetch: Literal["all", "one"] | None = "all",
+    is_proc: bool = False,
+) -> Any:
+    """Commits, or rolls back and re-raises. The rows are whatever the SQL
+    selects; the caller's return type is the claim about their shape."""
     async with conn.cursor(aiomysql.DictCursor) as cursor:
         try:
-            if isProc:
+            if is_proc:
                 await cursor.callproc(query, params or ())
             else:
                 await cursor.execute(query, params or ())
-            
+
             if fetch == "all":
                 result = await cursor.fetchall()
             elif fetch == "one":
                 result = await cursor.fetchone()
             else:
                 result = None
-            
+
             await conn.commit()
             return result
 
@@ -115,6 +120,7 @@ async def execute_query(conn, query, params=None, fetch="all", isProc:bool = Fal
             await conn.rollback()
             logger.error(f"[DB QUERY ERROR]: {e}\nQuery: {query}\nParams: {params}")
             raise
+
 
 ############################################
 # ^ Above are Nightmare-Bot functions
@@ -135,45 +141,58 @@ async def execute_query(conn, query, params=None, fetch="all", isProc:bool = Fal
 # v Below are functions specific to HostPost
 ############################################
 
-async def get_scheduled_event_id(db, scheduled_event_name):
-    """ Gets the id given a name scheduled_events
-    """
+
+async def get_scheduled_event_id(db: aiomysql.Connection, scheduled_event_name: str) -> int:
     sql_scheduled_event_id = """SELECT id
                                 FROM events_scheduled
-                                WHERE display_name = %s   
+                                WHERE display_name = %s
                             """
     params = (scheduled_event_name,)
     event_id = await execute_query(db, sql_scheduled_event_id, params=params, fetch="one")
     return event_id["id"]
 
-async def get_event_scores(db, scheduled_event_id):
-    """ Gets the users and their scores from the selected event 
-    """
+
+class ScoreRow(TypedDict):
+    name: str
+    """`users.tag`."""
+    user_id: str
+    discord_name: str
+    """`users.discord_user_name`, what `discord.utils.get(members, name=...)` matches."""
+    score: str
+    """The summed points, cast to a string by the query."""
+
+
+async def get_event_scores(db: aiomysql.Connection, scheduled_event_id: int) -> list[ScoreRow]:
+    """Best first."""
     sql_event_scores = """SELECT users.tag AS name,
                                 CAST(r.user_id AS CHAR) AS user_id,
                                 users.discord_user_name AS discord_name,
                                 CAST(SUM(r.score) AS CHAR) AS score
                             FROM event_result_points r
                             INNER JOIN users ON r.user_id = users.id
-                            WHERE scheduled_event_id = %s 
+                            WHERE scheduled_event_id = %s
                             GROUP BY r.user_id
                             ORDER BY SUM(r.score) DESC
                         """
     params = (scheduled_event_id,)
-    return await execute_query(db, sql_event_scores, params=params, isProc=False)
+    return await execute_query(db, sql_event_scores, params=params, is_proc=False)
 
 
-async def get_hosting_schedule(db):
-    """ Gets current and future events and the associated hosts. Gets all future
-        evets_scheduled.
-        The output is a list of dicts with keys as follows:
-            event_name: str
-            start: datetime
-            host: str | None
-            active: integer (1 if active, 0 if not)
-    """
-    sql_host_schedule = """SELECT CAST(e.id AS CHAR) AS event_id, 
-                            events.name AS event_name, 
+class HostingScheduleRow(TypedDict):
+    event_id: str
+    event_name: str
+    start: datetime
+    """Naive, in UTC."""
+    host: str | None
+    """The host's `users.tag`, or None with no host."""
+    active: int
+    """1 if scheduled, 0 if cancelled."""
+
+
+async def get_hosting_schedule(db: aiomysql.Connection) -> list[HostingScheduleRow]:
+    """Every scheduled event not yet over, earliest first."""
+    sql_host_schedule = """SELECT CAST(e.id AS CHAR) AS event_id,
+                            events.name AS event_name,
                             e.utc_start_dt AS start,
                             users.tag AS host,
                             CAST(e.active AS SIGNED) AS active
@@ -185,7 +204,7 @@ async def get_hosting_schedule(db):
                             ORDER BY e.utc_start_dt
                         """
     params = ()
-    return await execute_query(db, sql_host_schedule, params=params, fetch="all", isProc=False)
+    return await execute_query(db, sql_host_schedule, params=params, fetch="all", is_proc=False)
 
 
 # `update_host_in_db` and `remove_host_from_event_db` were here. Task 15-04
@@ -194,9 +213,9 @@ async def get_hosting_schedule(db):
 # this bot stopped doing.
 
 
-async def get_event_host_id(db, scheduled_event_id: int) -> int | None:
-    """ Returns user id of a host if one assigned to scheduled event.
-        Otherwise returns None.
+async def get_event_host_id(db: aiomysql.Connection, scheduled_event_id: int) -> int | None:
+    """Returns user id of a host if one assigned to scheduled event.
+    Otherwise returns None.
     """
     sql_get_host_id = """
                         SELECT host_id
@@ -204,112 +223,111 @@ async def get_event_host_id(db, scheduled_event_id: int) -> int | None:
                         WHERE id = %s
                     """
     params = (scheduled_event_id,)
-    host_id = await execute_query(db, sql_get_host_id, params=params, fetch="one", isProc=False)
+    host_id = await execute_query(db, sql_get_host_id, params=params, fetch="one", is_proc=False)
     if host_id:
         return host_id["host_id"]
     else:
         return None
-    
 
-async def get_host_info(db, host_user_id) -> dict[str] | None:
-    """ Retrieves host information from the database: specifically
-        - bot_display_name
-        - bot_pfp_filename
-    """
+
+class HostInfo(TypedDict):
+    bot_display_name: str
+    bot_pfp_filename: str
+    """A file under `images/`."""
+
+
+async def get_host_info(db: aiomysql.Connection, host_user_id: int) -> HostInfo | None:
+    """None for a host with no `hosts` row."""
     sql_get_host_info = """
-                        SELECT bot_display_name AS bot_display_name, 
+                        SELECT bot_display_name AS bot_display_name,
                                 bot_pfp AS bot_pfp_filename
                         FROM hosts
                         WHERE user_id = %s
                         """
     params = (host_user_id,)
-    host_info_dict = await execute_query(db, sql_get_host_info, 
-                                         params=params, fetch="one", isProc=False)
+    host_info_dict = await execute_query(db, sql_get_host_info, params=params, fetch="one", is_proc=False)
     if host_info_dict:
         return host_info_dict
     else:
         return None
 
 
-async def check_db_for_hosting_support(db, DATABASE):
-    """ Checks database columns of 'events_scheduled' to see if 'host_id' column exists. 
+async def check_db_for_hosting_support(db: aiomysql.Connection, database: str) -> bool:
+    """Checks database columns of 'events_scheduled' to see if 'host_id' column exists.
     Returns True if exists, False if not.
     """
     sql_check_host_column = """
                             SELECT COUNT(*) AS count
                             FROM information_schema.columns
                             WHERE table_schema = %s
-                            AND table_name = 'events_scheduled' 
+                            AND table_name = 'events_scheduled'
                             AND column_name = 'host_id'
                             """
-    params = (DATABASE,)
-    result = await execute_query(db, sql_check_host_column, params=params, fetch='one', isProc=False)
-    return result['count'] > 0
+    params = (database,)
+    result = await execute_query(db, sql_check_host_column, params=params, fetch="one", is_proc=False)
+    return result["count"] > 0
 
 
-async def check_for_custom_message(db, event_name: str, 
-                            post_type: Literal[
-                                "one_hour",
-                                "ten_minute",
-                                "prix_open",
-                                "prix_result",
-                                "event_results"],
-                            host_id: int | None):
-    """
-    """
-    sql_check_host_message  = """
+async def check_for_custom_message(
+    db: aiomysql.Connection,
+    event_name: str,
+    post_type: Literal["one_hour", "ten_minute", "prix_open", "prix_result", "event_results"],
+    host_id: int | None,
+) -> bool:
+    sql_check_host_message = """
                             SELECT COUNT(*) AS count
                             FROM event_messages A
-                            INNER JOIN events B ON A.event_id = B.id 
-                            WHERE B.name = %s 
-                                AND A.message_type = %s 
+                            INNER JOIN events B ON A.event_id = B.id
+                            WHERE B.name = %s
+                                AND A.message_type = %s
                                 AND A.host_id = %s
                                     """
-    params = (event_name, post_type, host_id,)
-    num_posts = await execute_query(db, sql_check_host_message, params=params, fetch='one', isProc=False)
-    if num_posts['count'] > 0:
-        return True
-    else:
-        return False
+    params = (
+        event_name,
+        post_type,
+        host_id,
+    )
+    num_posts = await execute_query(db, sql_check_host_message, params=params, fetch="one", is_proc=False)
+    return num_posts["count"] > 0
 
 
-async def get_post_template(db, event_name: str, 
-                            post_type: Literal[
-                                "one_hour",
-                                "ten_minute",
-                                "prix_open",
-                                "prix_result",
-                                "event_results"],
-                            host_id: int | None):
-    """
-    """
+async def get_post_template(
+    db: aiomysql.Connection,
+    event_name: str,
+    post_type: Literal["one_hour", "ten_minute", "prix_open", "prix_result", "event_results"],
+    host_id: int | None,
+) -> str:
     # Check to see if host_id has an assigned post of post_type in post table
     is_custom_message: bool = False
     if host_id:
-        is_custom_message = await check_for_custom_message(db, 
-                                                           event_name, 
-                                                           post_type, 
-                                                           host_id)
+        is_custom_message = await check_for_custom_message(db, event_name, post_type, host_id)
     if host_id and is_custom_message:
         sql_message = """
                 SELECT A.post AS post
                 FROM event_messages A
-                INNER JOIN events B ON A.event_id = B.id 
+                INNER JOIN events B ON A.event_id = B.id
                 WHERE B.name = %s
                     AND A.message_type = %s
                     AND A.host_id <=> %s
                     """
-        params = (event_name, post_type, host_id,)
+        params = (
+            event_name,
+            post_type,
+            host_id,
+        )
     else:
         sql_message = """
                 SELECT A.post AS post
                 FROM event_messages A
-                INNER JOIN events B ON A.event_id = B.id 
+                INNER JOIN events B ON A.event_id = B.id
                 WHERE B.name = %s
                     AND A.message_type = %s
                     AND A.host_id <=> NULL
                     """
-        params = (event_name, post_type,)
-        
-    message = await execute_query(db, sql_message, params=params, fetch='one', isProc=False)
+        params = (
+            event_name,
+            post_type,
+        )
+
+    message = await execute_query(db, sql_message, params=params, fetch="one", is_proc=False)
     return message["post"]

@@ -1,17 +1,19 @@
 """
-Contains slash commands and associated views to allow users to view which events are hosted and 
+Contains slash commands and associated views to allow users to view which events are hosted and
 sign up for events.
 """
-from datetime import datetime, UTC
 import logging
+from datetime import UTC, datetime
 
 import discord
 from discord import app_commands
 from discord.ext import commands
-from src.settings import get_settings
-from src.fzd_api import FzdApiError
-from src.fzd_db import get_db_connection, get_hosting_schedule
+
 from src.data.event_post_text import access_roles
+from src.fzd_api import FzdApiError
+from src.fzd_db import HostingScheduleRow, get_db_connection, get_hosting_schedule
+from src.main import HostBot
+from src.settings import get_settings
 from src.utils.hostpost_utils import discord_timestamp
 
 logger = logging.getLogger(__name__)
@@ -22,9 +24,9 @@ rejects a longer one rather than truncating it, so the trim happens here."""
 
 
 class HostingSchedule(commands.Cog):
-    def __init__(self, bot: commands.Bot, event_list) -> None:
-        self.bot: commands.Bot = bot
-        self.event_list: list[str] | None = event_list
+    def __init__(self, bot: HostBot, event_list: list[str]) -> None:
+        self.bot = bot
+        self.event_list = event_list
 
     ''' Autocomplete methods '''
     async def event_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -32,21 +34,15 @@ class HostingSchedule(commands.Cog):
 
         # Return up to 25 results (25=discord limit)
         return [app_commands.Choice(name=event, value=f"{event}") for event in options[:25]]
-    
+
 
     ''' Helper Methods '''
     @staticmethod
-    def format_events_for_schedule_board(event_dict):
+    def format_events_for_schedule_board(event_dict: list[HostingScheduleRow]) -> str:
         schedule_text = ''
         for i, event in enumerate(event_dict):
-            if not event['host']:
-                host_name = "🔴 None"
-            else:
-                host_name = f"🟢 {event['host']}"
-            if event['active'] == 1:
-                status = "🟢 Scheduled"
-            else:
-                status = "🔴 Cancelled"
+            host_name = f"🟢 {event['host']}" if event["host"] else "🔴 None"
+            status = "🟢 Scheduled" if event["active"] == 1 else "🔴 Cancelled"
                 # taking naive datetime and making UTC aware
             time = discord_timestamp(event['start'].replace(tzinfo=UTC), "long")
             schedule_text += f"**{event['event_name']} | {time}**\n> Host: {host_name} | {status}"
@@ -56,13 +52,13 @@ class HostingSchedule(commands.Cog):
 
 
     @staticmethod
-    def build_schedule_embed(event_dict: list[dict]) -> discord.Embed:
+    def build_schedule_embed(event_dict: list[HostingScheduleRow]) -> discord.Embed:
         schedule_board = discord.Embed(
-                            title="🏁 Host Signups for Scheduled Events", 
-                            description=f"*As of {discord_timestamp(datetime.now(), 'long')}*", 
+                            title="🏁 Host Signups for Scheduled Events",
+                            description=f"*As of {discord_timestamp(datetime.now(), 'long')}*",
                             color=discord.Color.orange()
                             )
-                        
+
         schedule_text = HostingSchedule.format_events_for_schedule_board(event_dict)
         schedule_board.add_field(name="", value=schedule_text, inline=False)
 
@@ -87,7 +83,7 @@ class HostingSchedule(commands.Cog):
             await interaction.response.send_message(content, ephemeral=ephemeral)
 
 
-    async def update_live_board(self, interaction: discord.Interaction, event_dict: list[dict]):
+    async def update_live_board(self, interaction: discord.Interaction, event_dict: list[HostingScheduleRow]):
         """ Edits the anchor message to show `event_dict`.
         """
         channel_id = get_settings().hosting_schedule_channel
@@ -104,7 +100,7 @@ class HostingSchedule(commands.Cog):
             if channel is None:
                 # Fallback if the channel is not in the bot's internal cache
                 channel = await self.bot.fetch_channel(channel_id)
-            
+            assert isinstance(channel, discord.TextChannel)
             message = await channel.fetch_message(message_id)
             await message.edit(embed=schedule_board)
 
@@ -116,7 +112,7 @@ class HostingSchedule(commands.Cog):
             await self.respond(interaction, f"An error occurred: {e}")
 
 
-    async def resolve_event(self, interaction: discord.Interaction, event: str) -> dict | None:
+    async def resolve_event(self, interaction: discord.Interaction, event: str) -> HostingScheduleRow | None:
         """ Finds the scheduled event the host named, refreshing the autocomplete list on the way.
 
         Replies and returns None if there is nothing to act on, so a caller can
@@ -126,13 +122,13 @@ class HostingSchedule(commands.Cog):
         async with get_db_connection(self.bot.db_pool) as db:
             event_dict = await get_hosting_schedule(db)
         # Create event list for autocomplete
-        self.event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
+        self.event_list = [s["event_name"] for s in event_dict]
 
         if not event_dict:
             await self.respond(interaction, "No events are currently scheduled.", ephemeral=True)
             return None
 
-        event_info = next((e for e in event_dict if e.get('event_name') == event), None)
+        event_info = next((e for e in event_dict if e["event_name"] == event), None)
         if event_info is None:
             await self.respond(interaction, f"Event {event} not found.", ephemeral=True)
             return None
@@ -155,7 +151,7 @@ class HostingSchedule(commands.Cog):
             async with get_db_connection(self.bot.db_pool) as db:
                 event_dict = await get_hosting_schedule(db)
             # Create event list for autocomplete
-            self.event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
+            self.event_list = [s["event_name"] for s in event_dict]
 
             if not event_dict:
                 await interaction.response.send_message("No events are currently scheduled.", ephemeral=True)
@@ -249,7 +245,7 @@ class HostingSchedule(commands.Cog):
     #         discord.Object(id=int(get_settings().hosting_schedule_channel)).id)
     #     await post_channel.send(embed=schedule_board)
     #     await interaction.response.send_message("Anchor message sent.")
-            
+
 
     @hosting_schedule.error
     @update_host_for_event.error
@@ -261,7 +257,8 @@ class HostingSchedule(commands.Cog):
                 "This command is Circuit Crew only. Hit up a mod if you want to join Circuit Crew.",
                 ephemeral=True
                 )
-        else: raise error
+        else:
+            raise error
 
 
     async def cog_load(self):
@@ -269,12 +266,11 @@ class HostingSchedule(commands.Cog):
         self.remove_host_from_event.autocomplete("event")(self.event_autocomplete)
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: HostBot):
     server_id = get_settings().server_id
-    GUILD_ID = discord.Object(id=server_id)
-    # Initialize list of events. This is updated during slash command. Initialization and 
+    # Initialize list of events. This is updated during slash command. Initialization and
     # update are necessary to not have to continually pull from the database during autocomplete.
     async with get_db_connection(bot.db_pool) as db:
         event_dict = await get_hosting_schedule(db)
-        event_list = [s['event_name'] for s in event_dict if 'event_name' in s]
-        await bot.add_cog(HostingSchedule(bot, event_list), guild=GUILD_ID)
+        event_list = [s["event_name"] for s in event_dict]
+        await bot.add_cog(HostingSchedule(bot, event_list), guild=discord.Object(id=server_id))

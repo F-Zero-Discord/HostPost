@@ -14,6 +14,7 @@ from discord.ext import commands
 
 from src.data.event_post_text import access_roles, help_text_1, help_text_2
 from src.fzd_api import FzdApiError
+from src.main import HostBot
 from src.settings import get_settings
 from src.utils.build_hostposts import build_posts
 from src.utils.hostpost_exports import prepare_post_outputs
@@ -27,13 +28,18 @@ TEST_MODE_NOTICE = (
 logger = logging.getLogger(__name__)
 
 CALENDAR_DAYS = 14
+# Discord's limits on a choice: `events.name` is `varchar(120)`, so the label can pass the first.
+MAX_CHOICE_NAME = 100
+MAX_CHOICES = 25
 
 
 class EventBuilder(commands.Cog):
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: HostBot) -> None:
         self.bot = bot
 
-    async def event_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    async def event_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
         """The calendar, read on every keystroke. Nothing is held on the cog;
         the read is cheaper than the Discord round trip that follows it, and a
         failure is an empty list rather than an error the host cannot act on."""
@@ -47,17 +53,12 @@ class EventBuilder(commands.Cog):
         needle = current.lower()
         choices = []
         for event in events:
-            name = event["display_name"] or event["event"]
-            if needle not in name.lower() and needle not in event["event"].lower():
+            if needle not in event["event"].lower():
                 continue
             starts_at = parse_instant(event["starts_at"])
-            choices.append(
-                app_commands.Choice(
-                    name=f"{name} ({starts_at:%a %d %b %H:%M} UTC)"[:100],
-                    value=str(event["scheduled_event_id"]),
-                )
-            )
-        return choices[:25]
+            label = f"{event['event']} ({starts_at:%a %d %b %H:%M} UTC)"
+            choices.append(app_commands.Choice(name=label[:MAX_CHOICE_NAME], value=str(event["scheduled_event_id"])))
+        return choices[:MAX_CHOICES]
 
     @app_commands.command(name="event_setup", description="Set up an event's slots and scoring.")
     @discord.app_commands.checks.has_any_role(*access_roles)
@@ -115,5 +116,5 @@ class EventBuilder(commands.Cog):
         self.event_setup.autocomplete("event")(self.event_autocomplete)
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: HostBot):
     await bot.add_cog(EventBuilder(bot), guild=discord.Object(id=get_settings().server_id))

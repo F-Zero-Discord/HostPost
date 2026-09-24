@@ -3,8 +3,12 @@
 import argparse
 import logging
 import sys
+from datetime import datetime
+from typing import TypedDict
 
+import aiomysql
 import discord
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord import app_commands
 from discord.ext import commands
 
@@ -21,15 +25,27 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
+
+class QueuedPost(TypedDict):
+    """The text of one scheduled post, looked up by `job_name` when the
+    APScheduler job of that id fires. Editable until then."""
+
+    job_name: str
+    message: str
+    time: datetime
+
+
 class HostBot(commands.Bot):
+    # Set in `setup_hook`; every cog is loaded after them.
+    db_pool: aiomysql.Pool
+    scheduler: AsyncIOScheduler
+    api: FzdApi
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.job_stack = []
+        self.job_stack: list[QueuedPost] = []
 
-
-    async def on_app_command_error(
-        self, interaction: discord.Interaction, error: app_commands.AppCommandError
-    ) -> None:
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
         original_error = getattr(error, "original", error)
         logger.error(
             "Unhandled app command error for command=%s user=%s",
@@ -55,7 +71,6 @@ class HostBot(commands.Bot):
                 ephemeral=True,
             )
 
-    
     async def setup_hook(self):
         """Called automatically at startup, safe for async setup."""
         # Load all cogs from /cogs folder
@@ -105,7 +120,6 @@ class HostBot(commands.Bot):
                 details={"guild_id": settings.server_id},
             )
 
-
     async def close(self) -> None:
         """Shut the API session down with the bot.
 
@@ -116,7 +130,6 @@ class HostBot(commands.Bot):
         if api is not None:
             await api.close()
         await super().close()
-
 
     async def on_ready(self) -> None:
         logger.info("%s is now running", self.user)
@@ -158,6 +171,7 @@ def main() -> None:
 
     client = HostBot(command_prefix="!", intents=intents)
     client.run(token=settings.discord_token)
-    
-if __name__ == '__main__':
+
+
+if __name__ == "__main__":
     main()

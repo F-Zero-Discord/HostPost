@@ -2,6 +2,27 @@
 This module contains text information used in developing a posts for regular weekly events
 """
 
+from typing import TypedDict
+
+
+class PrixInfo(TypedDict):
+    shortname: str
+    fullname: str
+    emoji: str
+    """Custom emoji markup, or "" for a prix with none."""
+    mirror_emoji: str
+    tickets: int
+    mode: str
+    """`99` or `classic`: which game's role is pinged."""
+
+
+class EventInfo(TypedDict):
+    shortname: str
+    fullname: str
+    """Matches `events.name` in the database."""
+    score_channel: str
+
+
 access_roles = [
     1504297025615822909, # TestRole, in lurchin' about
     1370902782860726362, # Circuit Crew
@@ -13,7 +34,7 @@ access_roles = [
 
 automatable_posts = ["1hr", "10min", "go_post"]
 
-prix_info = [
+prix_info: list[PrixInfo] = [
     {"shortname": "knight", "fullname": "Knight League", "emoji": "<:GPKnight:1195076261232525332>", "mirror_emoji": "", "tickets": 3, "mode": "99"},
     {"shortname": "mknight", "fullname": "Mirror Knight League", "emoji": "<:GPMirrorKnight:1222897223054921832>", "mirror_emoji": "<:Mirror:1258440078665977926>", "tickets": 3, "mode": "99"},
     {"shortname": "queen", "fullname": "Queen League", "emoji": "<:GPQueen:1195076266311811233>", "mirror_emoji": "", "tickets": 3, "mode": "99"},
@@ -40,7 +61,7 @@ schedule_line = {
             }
 
 # Note that 'fullname' needs to be the same as the name in the 'events' table in the database.
-events = [
+events: list[EventInfo] = [
     {"shortname": "machine_mastery", "fullname": "Machine Mastery",
      "score_channel": "https://discordapp.com/channels/1019374132342816800/1212468365826981888"
      },
@@ -53,13 +74,13 @@ events = [
     {"shortname": "ead", "fullname": "Euro-Asia Drift",
      "score_channel": "https://discordapp.com/channels/1019374132342816800/1289209764307406909"
      },
-    {"shortname": "classics", "fullname": "Saturday Classics", 
+    {"shortname": "classics", "fullname": "Saturday Classics",
      "score_channel": "https://discordapp.com/channels/1019374132342816800/1344118938539135030"
-     }, 
+     },
     {"shortname": "cracked", "fullname": "Cracked Cup",
      "score_channel": "https://discordapp.com/channels/1019374132342816800/1212468894124736613"
      },
-    {"shortname": "apac", "fullname": "Asia-Pacific Open", 
+    {"shortname": "apac", "fullname": "Asia-Pacific Open",
      "score_channel": "https://discordapp.com/channels/1019374132342816800/1228660432307490846"
      },
     {"shortname": "classic_mm", "fullname": "Classic Machine Mastery",

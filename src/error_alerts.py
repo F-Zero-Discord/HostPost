@@ -74,6 +74,7 @@ async def send_error_alert(
         except discord.DiscordException:
             logger.exception("Failed to fetch configured error alert channel %s", channel_id)
             return
+    assert isinstance(channel, discord.TextChannel)
 
     try:
         await channel.send(

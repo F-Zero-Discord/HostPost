@@ -7,9 +7,24 @@ running SQL.
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
+
+from src.api_types import (
+    CatalogueLineupResponse,
+    EventDetailResponse,
+    EventHostResponse,
+    EventResponse,
+    EventScoringRequest,
+    EventScoringResponse,
+    HostAssignmentRequest,
+    LineupOfferResponse,
+    ModeKind,
+    RotationEntryResponse,
+    SlotEntryRequest,
+    SlotResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +39,7 @@ class FzdApiError(Exception):
     """
 
 
-class FzdApiNotConfigured(FzdApiError):
+class FzdApiNotConfiguredError(FzdApiError):
     """No base URL or no key in `.env`.
 
     A distinct type so the caller can say "not configured" rather than "could not
@@ -39,13 +54,12 @@ class FzdApi:
     `HostBot.close`. The `aiohttp` session is created on first use rather than in
     `__init__` so that constructing this needs no running event loop.
 
-    Every method answers the decoded JSON body as the API sent it: dicts and
-    lists of dicts, datetimes as ISO 8601 strings. Callers parse what they use.
+    Every method answers the decoded JSON body as the API sent it, typed as the
+    `TypedDict` in `api_types` of the schema it reads. Nothing validates the
+    body against that type.
     """
 
-    def __init__(
-        self, base_url: str, api_key: str, timeout_seconds: float = 10.0
-    ) -> None:
+    def __init__(self, base_url: str, api_key: str, timeout_seconds: float = 10.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout = aiohttp.ClientTimeout(total=timeout_seconds)
@@ -68,54 +82,37 @@ class FzdApi:
 
     # --- scheduled events -------------------------------------------------
 
-    async def calendar(self, days: int = 14) -> list[dict[str, Any]]:
+    async def calendar(self, days: int = 14) -> list[EventResponse]:
         """The scheduled events not yet over, earliest first."""
         return await self._request("GET", "/v1/events", params={"days": days})
 
-    async def event_detail(self, scheduled_event_id: int) -> dict[str, Any]:
-        """One scheduled event with its slots and scoring configuration."""
+    async def event_detail(self, scheduled_event_id: int) -> EventDetailResponse:
         return await self._request("GET", f"/v1/events/{scheduled_event_id}")
 
-    async def schedule(self, scheduled_event_id: int) -> list[dict[str, Any]]:
-        """The slots of a scheduled event, in position order."""
+    async def schedule(self, scheduled_event_id: int) -> list[SlotResponse]:
         return await self._request("GET", f"/v1/events/{scheduled_event_id}/schedule")
 
-    async def replace_schedule(
-        self, scheduled_event_id: int, entries: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """Make `entries`, in order, the whole schedule. Answers the schedule as
-        stored, with each slot's lineup resolved by the API.
-
-        Each entry is `{mode | lineup_id, starts_at, lobby}`; the API refuses
-        the whole write if a result already exists on the event.
-        """
-        return await self._request(
-            "PUT", f"/v1/events/{scheduled_event_id}/schedule", json=entries
-        )
+    async def replace_schedule(self, scheduled_event_id: int, entries: list[SlotEntryRequest]) -> list[SlotResponse]:
+        """Make `entries`, in order, the whole schedule. The API refuses the
+        whole write if a result already exists on the event."""
+        return await self._request("PUT", f"/v1/events/{scheduled_event_id}/schedule", json=entries)
 
     async def set_scoring(
         self,
         scheduled_event_id: int,
         *,
-        scoring_method: str,
+        scoring_method: Literal["points", "time"],
         num_mulligans: int,
         max_time_loss_cs: int | None,
         machine_counts_once: bool,
-    ) -> dict[str, Any]:
-        """Set how the event is scored. `max_time_loss_cs` is required under
-        `time` and must be None under `points`, and `machine_counts_once` is
-        refused under `time` or without the machine requirement; the API
-        refuses a mismatch."""
-        return await self._request(
-            "PUT",
-            f"/v1/events/{scheduled_event_id}/scoring",
-            json={
-                "scoring_method": scoring_method,
-                "num_mulligans": num_mulligans,
-                "max_time_loss_cs": max_time_loss_cs,
-                "machine_counts_once": machine_counts_once,
-            },
+    ) -> EventScoringResponse:
+        body = EventScoringRequest(
+            scoring_method=scoring_method,
+            num_mulligans=num_mulligans,
+            max_time_loss_cs=max_time_loss_cs,
+            machine_counts_once=machine_counts_once,
         )
+        return await self._request("PUT", f"/v1/events/{scheduled_event_id}/scoring", json=body)
 
     async def assign_host(
         self,
@@ -124,64 +121,42 @@ class FzdApi:
         discord_user_id: int,
         discord_user_name: str,
         tag: str | None = None,
-    ) -> dict[str, Any]:
-        """Make a Discord account the host of a scheduled event.
-
-        `discord_user_id` is the snowflake and it is sent as a string: it exceeds
-        2^53, so a JSON number is rounded by anything reading this API from a
-        browser.
-
-        `tag` is only used if the account has no row yet, and the API rejects one
-        over ten characters rather than truncating it — so the caller decides
-        what to cut.
-        """
-        return await self._request(
-            "PUT",
-            f"/v1/events/{scheduled_event_id}/host",
-            json={
-                "discord_user_id": str(discord_user_id),
-                "discord_user_name": discord_user_name,
-                "tag": tag,
-            },
+    ) -> EventHostResponse:
+        """Make a Discord account the host of a scheduled event. The API resolves
+        the account to a row in `users` itself; this bot never sees the id."""
+        body = HostAssignmentRequest(
+            discord_user_id=str(discord_user_id),
+            discord_user_name=discord_user_name,
+            tag=tag,
         )
+        return await self._request("PUT", f"/v1/events/{scheduled_event_id}/host", json=body)
 
-    async def remove_host(self, scheduled_event_id: int) -> dict[str, Any]:
+    async def remove_host(self, scheduled_event_id: int) -> EventHostResponse:
         """Leave a scheduled event with no host. Resolves nobody."""
         return await self._request("DELETE", f"/v1/events/{scheduled_event_id}/host")
 
     # --- what the game runs -----------------------------------------------
 
-    async def rotation(
-        self, now: datetime, *, kind: str, lookahead_minutes: int
-    ) -> list[dict[str, Any]]:
+    async def rotation(self, now: datetime, *, kind: ModeKind, lookahead_minutes: int) -> list[RotationEntryResponse]:
         """What the public game offers at `now` and within the lookahead, one
-        entry per window, for modes of `kind` (`prix` or `race`)."""
+        entry per window."""
         return await self._request(
             "GET",
             "/v1/ingame/rotation",
-            params={
-                "now": now.isoformat(),
-                "kind": kind,
-                "lookahead_minutes": lookahead_minutes,
-            },
+            params={"now": now.isoformat(), "kind": kind, "lookahead_minutes": lookahead_minutes},
         )
 
     async def lineup_offers(
         self, mode: str, *, lobby: str, now: datetime, lookahead_minutes: int
-    ) -> list[dict[str, Any]]:
+    ) -> list[LineupOfferResponse]:
         """What one mode offers one kind of lobby, minute by minute from `now`."""
         return await self._request(
             "GET",
             "/v1/ingame/lineups",
-            params={
-                "mode": mode,
-                "lobby": lobby,
-                "now": now.isoformat(),
-                "lookahead_minutes": lookahead_minutes,
-            },
+            params={"mode": mode, "lobby": lobby, "now": now.isoformat(), "lookahead_minutes": lookahead_minutes},
         )
 
-    async def lineups(self, mode: str) -> list[dict[str, Any]]:
+    async def lineups(self, mode: str) -> list[CatalogueLineupResponse]:
         """The catalogue of lineups a slot can name, for one mode."""
         return await self._request("GET", "/v1/lineups", params={"mode": mode})
 
@@ -192,11 +167,11 @@ class FzdApi:
         method: str,
         path: str,
         *,
-        params: dict[str, Any] | None = None,
+        params: dict[str, str | int] | None = None,
         json: Any = None,
     ) -> Any:
         if not self.configured:
-            raise FzdApiNotConfigured(
+            raise FzdApiNotConfiguredError(
                 "FZD_API_BASE_URL and FZD_API_KEY are not set in this bot's .env, so there is no API to call."
             )
 
@@ -219,15 +194,11 @@ class FzdApi:
 
         except TimeoutError as error:
             logger.error("[API] %s %s timed out", method, url)
-            raise FzdApiError(
-                "The FZD API did not answer in time. Nothing was changed."
-            ) from error
+            raise FzdApiError("The FZD API did not answer in time. Nothing was changed.") from error
 
         except aiohttp.ClientError as error:
             logger.error("[API] %s %s failed: %s", method, url, error)
-            raise FzdApiError(
-                f"Could not reach the FZD API ({error}). Nothing was changed."
-            ) from error
+            raise FzdApiError(f"Could not reach the FZD API ({error}). Nothing was changed.") from error
 
     @staticmethod
     async def _read_body(response: aiohttp.ClientResponse) -> Any:
@@ -263,5 +234,7 @@ class FzdApi:
         if status == 422:
             return f"The FZD API rejected the request as invalid: {detail if isinstance(detail, str) else body or 'no detail given'}"
         if status >= 500:
-            return f"The FZD API failed ({status}). Nothing was changed; try again, and tell a dev if it keeps happening."
+            return (
+                f"The FZD API failed ({status}). Nothing was changed; try again, and tell a dev if it keeps happening."
+            )
         return f"The FZD API answered {status}. ({detail or 'no detail given'})"
