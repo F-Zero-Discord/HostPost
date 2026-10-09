@@ -133,8 +133,9 @@ empty: an empty alert channel turns alerts off, and an empty hosting channel or 
 the host commands say the board is not configured and skip refreshing it.
 
 `FZD_API_BASE_URL` and `FZD_API_KEY` are **optional on purpose** (`FZD_API_TIMEOUT_SECONDS`
-defaults to 10). They are needed by `/event_setup`, `/update_host_for_event` and
-`/remove_host_from_event`; left empty, those three reply that the API is not configured and the
+defaults to 10). They are needed by `/event_setup`, `/update_host_for_event`,
+`/remove_host_from_event` and the `getResults_*` job; left empty, the three commands reply that the
+API is not configured, the job hands the unfilled results post to the validation channel, and the
 job-management commands are unaffected. Making them required would take the whole bot down, which
 is the bounded failure Plan 15 deliberately designed against — this bot is deployed on its own,
 not together with the API.
@@ -218,9 +219,13 @@ The same string is rebuilt independently in `hostpost_commands.event_setup` as
 `scheduled_event_name` to look the event up in `events_scheduled.display_name`.
 
 Prix-results and FinalResults jobs are scheduled **paused**; `/post_prix_winner` and
-`/validate_results` resume them. `getResults_*` fires at scoreboard close, pulls scores, substitutes
-the `@[first]` / `@(first)` / `[firstpoints]` placeholders, and either posts straight to the
-announce channel or drops a draft in the validation channel for the host to approve.
+`/validate_results` resume them. `getResults_*` fires at scoreboard close, reads the event's
+scoreboard from the API, substitutes the `@[first]` / `@(first)` / `[firstpoints]` placeholders
+(`autoposts_utils.podium` and `fill_podium`), and posts straight to the announce channel only when
+validation is off and the board ranks three players. Otherwise, and whenever the API call fails, the
+draft goes to the validation channel for the host to edit and `/validate_results`. A winner is
+mentioned as `<@discord_user_id>` from the scoreboard row, which Discord renders without a member
+cache, so the bot runs without the `members` intent.
 
 The APScheduler job store is **in memory** — a bot restart silently loses every queued post.
 
@@ -233,7 +238,9 @@ and the API resolves that to a row in `users` and writes `events_scheduled.host_
 bot never sees a `users.id`, which is why the commands were ported rather than handed an identity
 endpoint. `/event_setup` (task 19-06) reads the calendar (`GET /v1/events`), an event
 (`GET /v1/events/{id}`), the in-game rotation and lineup offers (`GET /v1/ingame/…`) and the
-lineup catalogue (`GET /v1/lineups`), and writes the scoring and the schedule. Every method's
+lineup catalogue (`GET /v1/lineups`), and writes the scoring and the schedule. The `getResults_*`
+job reads the ranked board (`GET /v1/events/{id}/scoreboard`), which is where multipliers and
+mulligans are applied; the bot does not sum scores itself. Every method's
 return type is the `TypedDict` in `src/api_types.py` of the schema its endpoint answers, so the
 client's signatures are the list of what this bot reads and writes; instants are ISO 8601
 strings, parsed where read.
@@ -256,21 +263,25 @@ The client is built in `HostBot.setup_hook` as `bot.api` and closed in `HostBot.
 
 `src/fzd_db.py` is a trimmed copy of fzd-bot's DB layer: `get_db_connection` is an async context
 manager over the pool, `execute_query` commits or rolls back per call. All access is raw SQL against
-the shared FZD schema — `events`, `events_scheduled`, `users`, `event_result_points`,
-`event_messages`, `hosts`. The bot only reads events the FZD database has already scheduled; it
-cannot invent one. `get_scheduled_event_id` (a lookup by `events_scheduled.display_name`, rebuilt
-from the job name) is still what `autopost_commands` uses to find the event a job belongs to.
+the shared FZD schema — `events`, `events_scheduled`, `users`, `event_messages`, `hosts`. Results
+are not read from the database at all; they come from the API's scoreboard. The bot only reads
+events the FZD database has already scheduled; it cannot invent one. `get_scheduled_event_id` (a
+lookup by `events_scheduled.display_name`, rebuilt from the job name) is still what
+`autopost_commands` uses to find the event a job belongs to.
 
-Its `users` footprint is now exactly two read-joins, and both read a *username* for display — do
-not repoint either at the snowflake: `get_event_scores`, whose `discord_name` feeds
-`discord.utils.get(..., name=...)` in `autopost_commands`, and `get_hosting_schedule`. The write
-path against `users` and against `events_scheduled.host_id` is gone; see the FZD API above.
+Its `users` footprint is exactly one read-join, `get_hosting_schedule`, which reads the host's
+*tag* for display. The write path against `users` and against `events_scheduled.host_id` is gone;
+see the FZD API above.
 
 That schema is much larger than the slice HostPost touches, and dev/prod are not the same shape.
-`../fzd-db` documents all three schemas (generated from live introspection): `docs/overview.md`
-for the inventory, `docs/drift.md` for what differs between `fzd_dev`, `fzd_prod`, and
-`fzd_playground`, and `docs/<schema>/tables/*.md` per table. Regenerate with the scripts in
-`../fzd-db/tools/`. Relevant to changes here: `events` handles time differently in dev
+Two sibling checkouts describe it. `../fzd-database` holds the hand-written SQL: table, view and
+routine definitions, and one directory per migration, which is where a table rename is explained.
+`../fzd-db-dump` records what actually runs in `fzd_prod`, from live introspection:
+`docs/overview.md` for the inventory and which repo reads each column, `docs/tables/*.md` and
+`docs/views/*.md` per object, `schema.sql` for exact DDL. Regenerate with the scripts in
+`../fzd-db-dump/tools/`. When a query here fails on a missing table or column, look in the
+migrations first: `event_result_points` became `event_results` that way, and this bot's results
+query broke with it. Relevant to changes here: `events` handles time differently in dev
 (`utc_time_std` + `utc_time_dst` + `dst_region`) than in prod (a single `utc_time`).
 
 ### Hardcoded IDs
@@ -290,8 +301,9 @@ button emoji never depends on an FZD id.
   routed through `src/error_alerts.py` reach the configured alert channel.
 - `hostpost_exports.prepare_post_outputs` constructs a **second** `PostScheduler(bot)` rather than
   fetching the loaded cog. It works only because the scheduler and job stack both live on `bot`.
-- `main.py` builds `intents` twice (module level and in `main()`); the one in `main()` wins and does
-  not set `members`, even though member lookup is used for winner mentions.
+- The bot runs without the `members` intent and nothing should come to need it: winner mentions
+  are snowflakes from the API, and `/post_prix_winner` takes its members from the command's options,
+  which Discord resolves without a cache.
 - Work happens on `dev`; `main` is the PR target.
 
 ## Comments and comment structure

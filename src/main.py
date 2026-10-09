@@ -21,11 +21,6 @@ from src.utils.scheduler import init_scheduler
 logger = logging.getLogger(__name__)
 
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-
 class QueuedPost(TypedDict):
     """The text of one scheduled post, looked up by `job_name` when the
     APScheduler job of that id fires. Editable until then."""
@@ -87,8 +82,9 @@ class HostBot(commands.Bot):
             )
             if not self.api.configured:
                 logger.warning(
-                    "FZD_API_BASE_URL / FZD_API_KEY are not set: /event_setup, "
-                    "/update_host_for_event and /remove_host_from_event will refuse until they are."
+                    "FZD_API_BASE_URL / FZD_API_KEY are not set: /event_setup, /update_host_for_event and "
+                    "/remove_host_from_event will refuse until they are, and final results posts will "
+                    "reach the validation channel unfilled."
                 )
             await self.load_extension("src.cogs.autopost_commands")
             await self.load_extension("src.cogs.hostpost_commands")

@@ -87,7 +87,7 @@ HostPost commands have restricted access to the following roles:
 The commands will be visible to any channel that HostPost has access to (including #f-zero99-racetrack, because the bot must post there), but anyone attempting to access without one of the above roles will be provided a message that the bot is meant for Circuit Crew so join today! Note that if HostPost is to write to a private channel, HostPost needs a role that has access to that channel, such as Circuit Crew.
 
 There is no channel restriction within the bot, so the bot should be granted access to specific channels from the discord server.
-Guild member intents are necessary because the bot looks up server members when allowing the host to select the mention of the member who won the prix.
+The bot does not need the guild members intent: the final results post mentions winners by the Discord ids the FZD API's scoreboard carries, and `/post_prix_winner` takes its members from the command's options.
 
 ## Channels
 
@@ -123,7 +123,7 @@ Architecture
 HostPost is constructed using command cogs similar to as is done in fzd-bot. This bot has three cogs/main modules: one to manage the `/event_setup` command and methods to build the posts, another to manage the commands associated with scheduling (using the APScheduler package), and a third for host assignment and the hosting schedule embed. The third is loaded conditionally — it is skipped if the `events_scheduled` table has no `host_id` column — so on a database without host support the hosting commands simply do not appear. In each is a god-class. Each also has one or more modules for functions that can live outside the class definition. One module contains all the relevant view classes (dropdowns, popups, buttons,...). The “event_post_text” module has the textual data (primarily template language), similar to how Pengbot manages data. The fzd_db.py module is a stripped down version of fzd-bot’s database interaction functions. The fzd_api.py module talks to the FZD API, which holds the database credentials; host assignment goes that way and no longer resolves users itself, so the “which row in `users` is this person” rule lives in one place instead of being copied into every bot. The remaining commands still use fzd_db.py, and the two will coexist until the rest of them move. The scheduler.py modules initializes the global scheduler. The scheduler has a job store in memory. Whenever the bot is restarted, job information is lost. Luckily, event setup is pretty straightforward in case of an outage. It is possible in the future to use the database as a job store.
 One quirk (or, inefficiency) in the bot is that it includes both the APScheduler class job store and a global job stack list (not actually a stack, as it is not FIFO). These contain complementary information. The only reason for the job stack is that message info needs to be stored there so that it is editable, as messages contained in the job stack cannot be. The code takes pains to create a new job stack entry whenever a job is registered in the APScheduler job store, and it is removed from the job stack when a job is completed.
 
-In the Discord Developer Portal, the bot must be provided both messaging and guild member intents.
+In the Discord Developer Portal, the bot must be provided the message content intent.
 
 ## Known Issues
 

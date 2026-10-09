@@ -22,6 +22,7 @@ from src.api_types import (
     LineupOfferResponse,
     ModeKind,
     RotationEntryResponse,
+    ScoreboardResponse,
     SlotEntryRequest,
     SlotResponse,
 )
@@ -91,6 +92,11 @@ class FzdApi:
 
     async def schedule(self, scheduled_event_id: int) -> list[SlotResponse]:
         return await self._request("GET", f"/v1/events/{scheduled_event_id}/schedule")
+
+    async def scoreboard(self, scheduled_event_id: int) -> ScoreboardResponse:
+        """The event's board as the API ranks it: multipliers applied, mulligans
+        dropped, rows best first. Public on the API; the key is sent anyway."""
+        return await self._request("GET", f"/v1/events/{scheduled_event_id}/scoreboard")
 
     async def replace_schedule(self, scheduled_event_id: int, entries: list[SlotEntryRequest]) -> list[SlotResponse]:
         """Make `entries`, in order, the whole schedule. The API refuses the

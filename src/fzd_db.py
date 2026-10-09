@@ -152,32 +152,6 @@ async def get_scheduled_event_id(db: aiomysql.Connection, scheduled_event_name: 
     return event_id["id"]
 
 
-class ScoreRow(TypedDict):
-    name: str
-    """`users.tag`."""
-    user_id: str
-    discord_name: str
-    """`users.discord_user_name`, what `discord.utils.get(members, name=...)` matches."""
-    score: str
-    """The summed points, cast to a string by the query."""
-
-
-async def get_event_scores(db: aiomysql.Connection, scheduled_event_id: int) -> list[ScoreRow]:
-    """Best first."""
-    sql_event_scores = """SELECT users.tag AS name,
-                                CAST(r.user_id AS CHAR) AS user_id,
-                                users.discord_user_name AS discord_name,
-                                CAST(SUM(r.score) AS CHAR) AS score
-                            FROM event_result_points r
-                            INNER JOIN users ON r.user_id = users.id
-                            WHERE scheduled_event_id = %s
-                            GROUP BY r.user_id
-                            ORDER BY SUM(r.score) DESC
-                        """
-    params = (scheduled_event_id,)
-    return await execute_query(db, sql_event_scores, params=params, is_proc=False)
-
-
 class HostingScheduleRow(TypedDict):
     event_id: str
     event_name: str
@@ -205,12 +179,6 @@ async def get_hosting_schedule(db: aiomysql.Connection) -> list[HostingScheduleR
                         """
     params = ()
     return await execute_query(db, sql_host_schedule, params=params, fetch="all", is_proc=False)
-
-
-# `update_host_in_db` and `remove_host_from_event_db` were here. Task 15-04
-# replaced them with PUT and DELETE /v1/events/{id}/host: writing
-# `events_scheduled.host_id` needs a `users.id`, and holding one is exactly what
-# this bot stopped doing.
 
 
 async def get_event_host_id(db: aiomysql.Connection, scheduled_event_id: int) -> int | None:
