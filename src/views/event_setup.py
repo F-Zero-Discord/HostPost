@@ -84,6 +84,9 @@ RACE_GAP = 5
 RACE_OFFER_LOOKAHEAD_MINUTES = 9
 PUBLIC_PRIX_LOOKAHEAD_MINUTES = 180
 PUBLIC_PRIX_SHOWN = 6
+# What a slot's result can be worth on a Grand Prix and Mini Prix event: how
+# FZD runs it, not what the API admits. Widening it is an edit here.
+MULTIPLIERS = (1, 2, 3)
 BUTTONS_PER_ROW = 5
 SELECT_LIMIT = 25
 
@@ -104,6 +107,9 @@ class SlotDraft:
     lineup_id: int | None = None
     # The custom emoji's name, or "". Resolved in the guild at render time.
     emoji_name: str = ""
+    # What a result on the slot is worth. Set on the multipliers page; a pick
+    # that replaces the slot keeps it (see `put`).
+    multiplier: int = 1
     # The time the pick was offered from, which is where going back to this
     # slot offers again: a 99 pick at 22:07 was chosen from the offers at 22:05.
     offered_from: datetime = field(kw_only=True)
@@ -115,7 +121,7 @@ class SlotDraft:
         """Exactly one of `lineup_id` and `mode`, which the API refuses both or
         neither of. A mode alone is resolved to what the game offers at the
         minute, or to the mode's placeholder."""
-        entry = SlotEntryRequest(starts_at=self.starts_at.isoformat(), lobby=self.lobby)
+        entry = SlotEntryRequest(starts_at=self.starts_at.isoformat(), lobby=self.lobby, multiplier=self.multiplier)
         if self.lineup_id is not None:
             entry["lineup_id"] = self.lineup_id
         else:
@@ -156,12 +162,17 @@ def parse_hhmm(reference: datetime, text: str) -> datetime:
 
 
 def describe_slot(slot: SlotResponse) -> str:
-    """`20:00 public Grand Prix: Knight League`; a placeholder slot by its mode alone."""
+    """`20:00 public Grand Prix: Knight League (multiplier: x2)`; a placeholder
+    slot by its mode alone, and a multiplier only when it is not 1."""
     name = slot["mode"]
     if slot["tracks"]:
         name += f": {slot['lineup_name']}"
     when = hhmm(parse_instant(slot["starts_at"])) if slot["starts_at"] else "time not entered,"
-    return f"{when} {slot['lobby'] or 'lobby unknown'} {name}"
+    return f"{when} {slot['lobby'] or 'lobby unknown'} {name}{multiplier_suffix(slot['multiplier'])}"
+
+
+def multiplier_suffix(multiplier: int) -> str:
+    return f" (multiplier: x{multiplier})" if multiplier != 1 else ""
 
 
 class WizardModal(discord.ui.Modal):
@@ -261,8 +272,9 @@ class SettingsModal(WizardModal):
 
 
 class EventSetupView(discord.ui.LayoutView):
-    """Pages: `type`, `schedule`, then `posting`. Confirm writes; `posting`
-    asks how the event's posts go out and ends the wizard.
+    """Pages: `type`, `schedule` (with `multipliers` as a side page), then
+    `posting`. Confirm writes; `posting` asks how the event's posts go out and
+    ends the wizard.
 
     When the view stops, `slots` is the schedule the API answered after the
     write, or None if nothing was written. `prix_list` and `autopost` are set
@@ -314,6 +326,8 @@ class EventSetupView(discord.ui.LayoutView):
         self.private_leagues: list[League] = []
         self.public_entries: list[SlotDraft] = []
         self.public_picks: list[int] = []
+        # Choices made on the multipliers page, by slot index, until Done.
+        self.pending_multipliers: dict[int, int] = {}
 
         # Outcome.
         self.slots: list[SlotResponse] | None = None
@@ -330,6 +344,13 @@ class EventSetupView(discord.ui.LayoutView):
     def kind(self) -> str:
         """`game_modes.kind`: the offsets between slots follow it."""
         return "race" if self.event_type in ("race", "tb") else "prix"
+
+    @property
+    def offered_by_minute(self) -> bool:
+        """Whether a slot's candidates each carry their own minute, so the slot
+        starts at the pick: a race, or a private Classic Mini Prix, whose set
+        moves every minute."""
+        return self.kind == "race" or self.event_type == "cmp"
 
     @property
     def public_prix(self) -> bool:
@@ -431,7 +452,12 @@ class EventSetupView(discord.ui.LayoutView):
 
     def slot_line(self, draft: SlotDraft) -> str:
         emoji = self.emoji(draft.emoji_name)
-        return f"{f'{emoji} ' if emoji else ''}{hhmm(draft.starts_at)} {draft.lobby} {draft.name}"
+        return f"{f'{emoji} ' if emoji else ''}{self.slot_text(draft)}"
+
+    def slot_text(self, draft: SlotDraft) -> str:
+        """`slot_line` without the emoji, for a select's placeholder, which
+        renders custom emoji markup as text."""
+        return f"{hhmm(draft.starts_at)} {draft.lobby} {draft.name}{multiplier_suffix(draft.multiplier)}"
 
     def header(self) -> str:
         return f"## {self.event_name}, scheduled {discord_timestamp(self.starts_at, 'long')}"
@@ -641,15 +667,19 @@ class EventSetupView(discord.ui.LayoutView):
                 for offer in offers
             ] or await self.placeholder_minutes(mode, at)
         elif self.event_type == "cmp":
+            offers = await self.api.lineup_offers(
+                CLASSIC_MINI_PRIX, lobby="private", now=at, lookahead_minutes=RACE_OFFER_LOOKAHEAD_MINUTES
+            )
             offered = [
                 SlotDraft(
-                    "Classic Mini Prix",
-                    at,
+                    f"Classic Mini Prix: {offer['lineup']}",
+                    parse_instant(offer["starts_at"]),
                     "private",
                     mode=CLASSIC_MINI_PRIX,
                     emoji_name=prix_emoji_name("Classic Mini Prix", None),
                     offered_from=at,
                 )
+                for offer in offers
             ]
         else:
             if self.lobbies == "mixed":
@@ -723,9 +753,7 @@ class EventSetupView(discord.ui.LayoutView):
 
         if self.public_prix:
             listed = "\n".join(f"{index}. {self.slot_line(draft)}" for index, draft in enumerate(self.drafts, 1))
-            box.add_item(discord.ui.TextDisplay(f"{SCHEDULE_HEADING}\n{listed or 'No slots yet.'}"))
-            box.add_item(discord.ui.Separator())
-            self.build_public_prix(box)
+            lines = [listed or "No slots yet."]
         else:
             lines = [
                 f"{'▶ ' if index == self.cursor else ''}{index + 1}. {self.slot_line(draft)}"
@@ -733,8 +761,20 @@ class EventSetupView(discord.ui.LayoutView):
             ]
             if self.cursor == len(self.drafts):
                 lines.append(f"▶ {len(self.drafts) + 1}. (empty)")
-            box.add_item(discord.ui.TextDisplay("\n".join([SCHEDULE_HEADING, *lines])))
-            box.add_item(discord.ui.Separator())
+        listing = discord.ui.TextDisplay("\n".join([SCHEDULE_HEADING, *lines]))
+        if self.event_type == "gpmp":
+            box.add_item(
+                discord.ui.Section(
+                    listing,
+                    accessory=self.button("Multipliers", self.on_multipliers, emoji="🇽", disabled=not self.drafts),
+                )
+            )
+        else:
+            box.add_item(listing)
+        box.add_item(discord.ui.Separator())
+        if self.public_prix:
+            self.build_public_prix(box)
+        else:
             self.build_slot(box)
 
         box.add_item(discord.ui.Separator())
@@ -793,9 +833,9 @@ class EventSetupView(discord.ui.LayoutView):
         at = self.slot_time
         heading = f"### Editing: slot {number}" if editing else f"### Pick what you want to run in slot {number}"
         when = f"{hhmm(at)} UTC ({discord_timestamp(at, 'short')} your time)"
-        # A race offer carries its own minute, so a race slot starts at the
-        # pick, not at the time the offers were read from.
-        starts = f"The offers here start at {when}." if self.kind == "race" else f"The slot is set to start at {when}."
+        starts = (
+            f"The offers here start at {when}." if self.offered_by_minute else f"The slot is set to start at {when}."
+        )
         line = f"You can pick from the available selection here. {starts}"
         notes = []
         if self.offered_outside:
@@ -854,20 +894,7 @@ class EventSetupView(discord.ui.LayoutView):
                 )
             )
 
-        if self.event_type == "cmp":
-            if self.candidates:
-                candidate = self.candidates[0]
-                box.add_item(
-                    discord.ui.ActionRow(
-                        self.button(
-                            self.candidate_label(candidate, editing),
-                            self.on_pick_classic,
-                            style=discord.ButtonStyle.primary,
-                            emoji=self.emoji(candidate.emoji_name),
-                        )
-                    )
-                )
-        elif self.candidates:
+        if self.candidates:
             box.add_item(
                 self.select(
                     "Choose your lineup for this slot",
@@ -934,8 +961,11 @@ class EventSetupView(discord.ui.LayoutView):
         return timedelta(minutes=RACE_GAP if self.kind == "race" else PRIX_GAP)
 
     async def put(self, interaction: discord.Interaction, draft: SlotDraft) -> None:
-        """Make `draft` the slot at the cursor and move on to the next one."""
+        """Make `draft` the slot at the cursor and move on to the next one. A
+        multiplier belongs to the slot's place in the schedule, so a replaced
+        slot keeps the one it had."""
         if self.cursor < len(self.drafts):
+            draft.multiplier = self.drafts[self.cursor].multiplier
             self.drafts[self.cursor] = draft
         else:
             self.drafts.append(draft)
@@ -944,9 +974,6 @@ class EventSetupView(discord.ui.LayoutView):
 
     async def on_pick(self, interaction: discord.Interaction, value: str) -> None:
         await self.put(interaction, self.candidates[int(value)])
-
-    async def on_pick_classic(self, interaction: discord.Interaction) -> None:
-        await self.put(interaction, self.candidates[0])
 
     def mover(self, step: int) -> Handler:
         async def move(interaction: discord.Interaction) -> None:
@@ -973,6 +1000,11 @@ class EventSetupView(discord.ui.LayoutView):
 
     async def on_scoring(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(SettingsModal(self, scoring_only=True))
+
+    async def on_multipliers(self, interaction: discord.Interaction) -> None:
+        self.page = "multipliers"
+        self.pending_multipliers = {}
+        await self.show(interaction)
 
     async def on_start_over(self, interaction: discord.Interaction) -> None:
         """Drop every slot entered so far and ask the type again."""
@@ -1022,6 +1054,48 @@ class EventSetupView(discord.ui.LayoutView):
             await self.finish(interaction, f"{self.written()}\n\nNo posts were built. {error}.")
             return
         self.page = "posting"
+        await self.show(interaction)
+
+    # --- page: multipliers --------------------------------------------------
+
+    # One select per slot, each naming its slot and current value in its
+    # placeholder. A choice is answered with a bare defer, not a re-render: an
+    # edit would rebuild the message and put every select back to its
+    # placeholder, while an untouched message keeps showing what was chosen.
+    # Done writes the choices to the drafts.
+
+    def build_multipliers(self, box: discord.ui.Container) -> None:
+        box.add_item(
+            discord.ui.TextDisplay(
+                f"{self.header()}\n### Multipliers\n"
+                "What a result on each slot is worth. A slot is worth x1 unless set otherwise."
+            )
+        )
+        for index, draft in enumerate(self.drafts):
+            box.add_item(
+                self.select(
+                    f"{index + 1}. {self.slot_text(draft)}",
+                    [discord.SelectOption(label=f"x{multiplier}", value=str(multiplier)) for multiplier in MULTIPLIERS],
+                    self.multiplier_setter(index),
+                )
+            )
+        box.add_item(
+            discord.ui.ActionRow(self.button("Done", self.on_multipliers_done, style=discord.ButtonStyle.primary))
+        )
+
+    def multiplier_setter(self, index: int) -> Callable[[discord.Interaction, str], Awaitable[None]]:
+        async def set_multiplier(interaction: discord.Interaction, value: str) -> None:
+            self.pending_multipliers[index] = int(value)
+            self.last_interaction = interaction
+            await interaction.response.defer()
+
+        return set_multiplier
+
+    async def on_multipliers_done(self, interaction: discord.Interaction) -> None:
+        for index, multiplier in self.pending_multipliers.items():
+            self.drafts[index].multiplier = multiplier
+        self.pending_multipliers = {}
+        self.page = "schedule"
         await self.show(interaction)
 
     def written(self) -> str:
