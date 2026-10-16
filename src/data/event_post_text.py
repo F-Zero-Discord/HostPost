@@ -16,13 +16,6 @@ class PrixInfo(TypedDict):
     """`99` or `classic`: which game's role is pinged."""
 
 
-class EventInfo(TypedDict):
-    shortname: str
-    fullname: str
-    """Matches `events.name` in the database."""
-    score_channel: str
-
-
 access_roles = [
     1504297025615822909, # TestRole, in lurchin' about
     1370902782860726362, # Circuit Crew
@@ -60,35 +53,24 @@ schedule_line = {
     "private_mp_lineup": "<:EventTimer:1213542180195536897> {0}  {1} > {2} > {3}\n",
             }
 
-# Note that 'fullname' needs to be the same as the name in the 'events' table in the database.
-events: list[EventInfo] = [
-    {"shortname": "machine_mastery", "fullname": "Machine Mastery",
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1212468365826981888"
-     },
-    {"shortname": "friday_eu", "fullname": "Friday EU GP", # fzd_dev="Friday FZD EU"; fzd_prod=""Friday EU GP"
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1212468711185715260"
-     },
-    {"shortname": "friday_na", "fullname": "Friday NA GP", # fzd_dev="Friday FZD NA"; fzd_prod=""Friday NA GP"
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1212468778609147976"
-     },
-    {"shortname": "ead", "fullname": "Euro-Asia Drift",
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1289209764307406909"
-     },
-    {"shortname": "classics", "fullname": "Saturday Classics",
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1344118938539135030"
-     },
-    {"shortname": "cracked", "fullname": "Cracked Cup",
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1212468894124736613"
-     },
-    {"shortname": "apac", "fullname": "Asia-Pacific Open",
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1228660432307490846"
-     },
-    {"shortname": "classic_mm", "fullname": "Classic Machine Mastery",
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1406063056861007872"
-     },
-    {"shortname": "wacky_w", "fullname": "Wacky Wednesday",
-     "score_channel": "https://discordapp.com/channels/1019374132342816800/1219953737284587570"
-     },
+# Scores are submitted with `/submit` in the racetrack, where the
+# prix posts land, and the standings are read in the scoreboard channel. The
+# prix-results posts name both; the 1hr and 10min rows in `event_messages` spell
+# out their own channel links.
+racetrack_channel = "<#1185690454658912397>"
+scoreboard_channel = "<#1560327638638272705>"
+
+# The events HostPost builds posts for. Each name matches `events.name` in the database.
+events = [
+    "Machine Mastery",
+    "Friday EU GP",  # fzd_dev: "Friday FZD EU"
+    "Friday NA GP",  # fzd_dev: "Friday FZD NA"
+    "Euro-Asia Drift",
+    "Saturday Classics",
+    "Cracked Cup",
+    "Asia-Pacific Open",
+    "Classic Machine Mastery",
+    "Wacky Wednesday",
 ]
 
 custom_text = [

@@ -1039,12 +1039,10 @@ class EventSetupView(discord.ui.LayoutView):
             )
             return
         self.slots = slots
-        # `build_gp_posts` takes the score channel from `events`, so an event
-        # missing there has no posts to build.
-        if self.event_name not in {event["fullname"] for event in events}:
+        if self.event_name not in events:
             await self.finish(
                 interaction,
-                f"{self.written()}\n\nNo posts were built: HostPost has no score channel for {self.event_name}.",
+                f"{self.written()}\n\nNo posts were built: HostPost does not build posts for {self.event_name}.",
             )
             return
         # Pro Tracks and Team Battle slots have no post template.

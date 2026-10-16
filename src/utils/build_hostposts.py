@@ -6,7 +6,15 @@ import random
 from datetime import timedelta
 from typing import TypedDict
 
-from src.data.event_post_text import PrixInfo, clean_driving_list, custom_text, events, prix_info, schedule_line
+from src.data.event_post_text import (
+    PrixInfo,
+    clean_driving_list,
+    custom_text,
+    prix_info,
+    racetrack_channel,
+    schedule_line,
+    scoreboard_channel,
+)
 from src.data.slot_mapping import Prix
 from src.data.template_mapping import TemplateMap
 from src.fzd_db import get_db_connection, get_event_host_id, get_post_template
@@ -56,10 +64,6 @@ async def build_posts(bot: HostBot, event_name: str,
     else:
         map.tickets_emoji = "<:Tickets:1218943498338697256>"
         map.tickets_word = "tickets"
-
-    # Get event info dictionary associated with event_name
-    # event_info = next((item for item in events if item["fullname"] == event_name), None)
-
 
     # Build 1hr, 10 min, and Results posts
     async with get_db_connection(bot.db_pool) as db:
@@ -146,7 +150,6 @@ def build_gp_posts(event_name: str, prix_list: list[Prix]) -> tuple[list[str], l
     results_posts = []
     for prix in prix_list:
         prix_dict = prix_template(prix["prix"])
-        score_channel = next(item for item in events if item["fullname"] == event_name)["score_channel"]
 
         # Determine ticket text based on number of tickets needed for the prix.
         ticket_text = "<:Ticket:1194747589610967131>" if prix_dict["tickets"] == 1 else "<:Tickets:1218943498338697256>"
@@ -170,9 +173,9 @@ def build_gp_posts(event_name: str, prix_list: list[Prix]) -> tuple[list[str], l
         if prix_list.index(prix) + 1 == len(prix_list):
             # round to nearest 30 minutes and subtract 1 minute to get scoreboard close time
             scoreboard_close_time = round_to_30_minutes(prix["time"] + timedelta(minutes=60)) - timedelta(minutes=1)
-            scoring_text = f"That marks the end of {event_name}!\n\nScoreboard closes {discord_timestamp(scoreboard_close_time, 'relative')}, at {discord_timestamp(scoreboard_close_time, 'short')}, so quickly go to {score_channel} to submit your scores!```"
+            scoring_text = f"That marks the end of {event_name}!\n\nScoreboard closes {discord_timestamp(scoreboard_close_time, 'relative')}, at {discord_timestamp(scoreboard_close_time, 'short')}, so quickly submit your scores with the command `/submit` directly here in {racetrack_channel}! If you want to see the current standings, head over to {scoreboard_channel}.```"
         else:
             next_prix_dict = prix_template(prix_list[prix_list.index(prix) + 1]["prix"])
-            scoring_text = f"Head over to {score_channel} to submit your scores!\nThe {prix_list[prix_list.index(prix) + 1]['prix_type'].capitalize()} {next_prix_dict['emoji']} {next_prix_dict['mirror_emoji']} {next_prix_dict['fullname']} will start {discord_timestamp(prix_list[prix_list.index(prix) + 1]['time'], 'relative')}!```"
+            scoring_text = f"To submit your scores, use the command `/submit` directly here in {racetrack_channel}. If you want to see the current standings, head over to {scoreboard_channel}.\nThe {prix_list[prix_list.index(prix) + 1]['prix_type'].capitalize()} {next_prix_dict['emoji']} {next_prix_dict['mirror_emoji']} {next_prix_dict['fullname']} will start {discord_timestamp(prix_list[prix_list.index(prix) + 1]['time'], 'relative')}!```"
         results_posts.append(f"Prix #{prix_list.index(prix) + 1} Results```# <:1st:1201576405339754546> Congratulations @[Player] for winning the {prix['prix_type'].capitalize()} {prix_dict['emoji']} {prix_dict['mirror_emoji']} {prix_dict['fullname']}!\n{scoring_text}")
     return go_posts, results_posts

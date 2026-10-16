@@ -286,10 +286,15 @@ query broke with it. Relevant to changes here: `events` handles time differently
 
 ### Hardcoded IDs
 
-Role IDs (command access, `@Events` pings), custom emoji IDs, and score-channel URLs live inline in
-`data/event_post_text.py` and `utils/build_hostposts.py`. The `events` list there is matched against
-`events.name` in the database, and dev and prod use different display names for the same event (see
-the comments on `friday_eu` / `friday_na`) — an event that works in dev can silently 404 in prod.
+Role IDs (command access, `@Events` pings), custom emoji IDs, and the racetrack and scoreboard channel
+mentions live inline in `data/event_post_text.py` and `utils/build_hostposts.py`. Scores are
+submitted with `/submit` in the racetrack and read in the scoreboard channel: the
+prix-results posts name both through `racetrack_channel` and `scoreboard_channel`, and the 1hr and
+10min rows in `event_messages` carry their own channel links, so moving a channel is an edit here
+*and* an `UPDATE` on those rows. The
+`events` list there is matched against `events.name` in the database, and dev and prod use different
+display names for the same event (see the comments on the Friday events) — an event that works in
+dev can silently 404 in prod.
 The `/event_setup` wizard's buttons are the exception to the inline emoji ids: they look a prix's
 emoji up **by name** in the guild the command runs in (`slot_mapping.prix_emoji_name`), so the
 `lurchin about` test guild carries copies of FZD's twelve prix emoji under the same names, and a
