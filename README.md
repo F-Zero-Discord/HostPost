@@ -10,6 +10,18 @@ HostPost provides the following features:
 - Provides the draft event results post in the staging channel (i.e. #playground) for the host to review and then approve for final posting in the announcement channel (i.e. #fzd-events) using a slash command.
 - Allows for all posts to be modified using a popout.
 
+## Documentation
+
+| Page | What's in it |
+|---|---|
+| [docs/setup.md](docs/setup.md) | Installing, every setting, running locally, test mode |
+| [docs/structure.md](docs/structure.md) | What lives where |
+| [docs/internals.md](docs/internals.md) | The setup wizard, how posts are built and scheduled, the API and the database |
+| [docs/commands.md](docs/commands.md) | Every command: handler, arguments, who may run it, what it reads and writes |
+| [docs/how-to.md](docs/how-to.md) | Adding a command, changing post wording, personas, deploying |
+| [AGENTS.md](AGENTS.md) | Conventions and rough edges |
+| [deploy/README.md](deploy/README.md) | Deploying to the server |
+
 ## Commands
 
 ### /event_setup
