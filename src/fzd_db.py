@@ -143,12 +143,18 @@ async def execute_query(
 
 
 async def get_scheduled_event_id(db: aiomysql.Connection, scheduled_event_name: str) -> int:
+    """`scheduled_event_name` is the job-name label, `YYYY-MM-DD | <name>`: the
+    event's own `name` and the UTC date it starts on. No column holds the label
+    itself, so it is split back into the two columns that do."""
+    start_date, _, name = scheduled_event_name.partition(" | ")
     sql_scheduled_event_id = """SELECT id
                                 FROM events_scheduled
-                                WHERE display_name = %s
+                                WHERE name = %s AND DATE(utc_start_dt) = %s
                             """
-    params = (scheduled_event_name,)
+    params = (name, start_date)
     event_id = await execute_query(db, sql_scheduled_event_id, params=params, fetch="one")
+    if event_id is None:
+        raise LookupError(f"no scheduled event named {name!r} starts on {start_date}")
     return event_id["id"]
 
 
@@ -166,14 +172,13 @@ class HostingScheduleRow(TypedDict):
 async def get_hosting_schedule(db: aiomysql.Connection) -> list[HostingScheduleRow]:
     """Every scheduled event not yet over, earliest first."""
     sql_host_schedule = """SELECT CAST(e.id AS CHAR) AS event_id,
-                            events.name AS event_name,
+                            e.name AS event_name,
                             e.utc_start_dt AS start,
                             users.tag AS host,
                             CAST(e.active AS SIGNED) AS active
 
                             FROM events_scheduled e
                             LEFT JOIN users ON e.host_id = users.id
-                            INNER JOIN events ON e.event_id = events.id
                             WHERE e.utc_end_dt >= CURRENT_TIMESTAMP
                             ORDER BY e.utc_start_dt
                         """
@@ -200,15 +205,14 @@ async def get_event_host_id(db: aiomysql.Connection, scheduled_event_id: int) ->
 
 class HostInfo(TypedDict):
     bot_display_name: str
-    bot_pfp_filename: str
-    """A file under `images/`."""
+    bot_pfp_url: str
 
 
 async def get_host_info(db: aiomysql.Connection, host_user_id: int) -> HostInfo | None:
     """None for a host with no `hosts` row."""
     sql_get_host_info = """
                         SELECT bot_display_name AS bot_display_name,
-                                bot_pfp AS bot_pfp_filename
+                                bot_pfp AS bot_pfp_url
                         FROM hosts
                         WHERE user_id = %s
                         """
@@ -238,20 +242,20 @@ async def check_db_for_hosting_support(db: aiomysql.Connection, database: str) -
 
 async def check_for_custom_message(
     db: aiomysql.Connection,
-    event_name: str,
+    scheduled_event_id: int,
     post_type: Literal["one_hour", "ten_minute", "prix_open", "prix_result", "event_results"],
     host_id: int | None,
 ) -> bool:
     sql_check_host_message = """
                             SELECT COUNT(*) AS count
                             FROM event_messages A
-                            INNER JOIN events B ON A.event_id = B.id
-                            WHERE B.name = %s
+                            INNER JOIN events_scheduled es ON es.event_id = A.event_id
+                            WHERE es.id = %s
                                 AND A.message_type = %s
                                 AND A.host_id = %s
                                     """
     params = (
-        event_name,
+        scheduled_event_id,
         post_type,
         host_id,
     )
@@ -261,25 +265,28 @@ async def check_for_custom_message(
 
 async def get_post_template(
     db: aiomysql.Connection,
-    event_name: str,
+    scheduled_event_id: int,
     post_type: Literal["one_hour", "ten_minute", "prix_open", "prix_result", "event_results"],
     host_id: int | None,
 ) -> str:
+    """The template is the event's template's, reached through
+    `events_scheduled.event_id`, never by name: the row's own name need not be
+    the template's. A one-off has no template and so no row here."""
     # Check to see if host_id has an assigned post of post_type in post table
     is_custom_message: bool = False
     if host_id:
-        is_custom_message = await check_for_custom_message(db, event_name, post_type, host_id)
+        is_custom_message = await check_for_custom_message(db, scheduled_event_id, post_type, host_id)
     if host_id and is_custom_message:
         sql_message = """
                 SELECT A.post AS post
                 FROM event_messages A
-                INNER JOIN events B ON A.event_id = B.id
-                WHERE B.name = %s
+                INNER JOIN events_scheduled es ON es.event_id = A.event_id
+                WHERE es.id = %s
                     AND A.message_type = %s
                     AND A.host_id <=> %s
                     """
         params = (
-            event_name,
+            scheduled_event_id,
             post_type,
             host_id,
         )
@@ -287,15 +294,17 @@ async def get_post_template(
         sql_message = """
                 SELECT A.post AS post
                 FROM event_messages A
-                INNER JOIN events B ON A.event_id = B.id
-                WHERE B.name = %s
+                INNER JOIN events_scheduled es ON es.event_id = A.event_id
+                WHERE es.id = %s
                     AND A.message_type = %s
                     AND A.host_id <=> NULL
                     """
         params = (
-            event_name,
+            scheduled_event_id,
             post_type,
         )
 
     message = await execute_query(db, sql_message, params=params, fetch="one", is_proc=False)
+    if message is None:
+        raise LookupError(f"no {post_type} template for scheduled event {scheduled_event_id}")
     return message["post"]

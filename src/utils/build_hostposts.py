@@ -68,10 +68,9 @@ async def build_posts(bot: HostBot, event_name: str,
     # Build 1hr, 10 min, and Results posts
     async with get_db_connection(bot.db_pool) as db:
         host_id = await get_event_host_id(db, scheduled_event_id)
-        # custom_message = await check_for_custom_message(db, event_name, post_type, host_id)
-        hour_template =  await get_post_template(db, event_name, "one_hour", host_id)
-        ten_min_template =  await get_post_template(db, event_name, "ten_minute", host_id)
-        event_results_template = await get_post_template(db, event_name, "event_results", host_id)
+        hour_template = await get_post_template(db, scheduled_event_id, "one_hour", host_id)
+        ten_min_template = await get_post_template(db, scheduled_event_id, "ten_minute", host_id)
+        event_results_template = await get_post_template(db, scheduled_event_id, "event_results", host_id)
     hour_post = rf"One Hour Post```{hour_template.format(**map.mapping).replace(r"\n", "\n")}```"
     ten_min_post = rf"10 Minute Post```{ten_min_template.format(**map.mapping).replace(r"\n", "\n")}```"
     event_results_post = rf"Results Post```{event_results_template.format(**map.mapping).replace(r"\n", "\n")}```"

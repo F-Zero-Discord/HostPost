@@ -11,7 +11,7 @@ database. See `README.md` for the user-facing command reference.
 
 ## Design philosophy
 
-Per decision 0009: **contributor experience outranks robustness.** Four volunteers touch FZD's
+**Contributor experience outranks robustness.** Four volunteers touch FZD's
 code, and this bot is maintained and deployed by one of them. A change that generally works and
 ships beats one that always works and never lands. When a choice trades "harder to contribute to"
 against "harder to break", choose the one that can be contributed to — the question a review asks is
@@ -20,7 +20,7 @@ against "harder to break", choose the one that can be contributed to — the que
 **Contributor experience is measured at read time.** The maintainer opens this repo cold, months
 after the last change, to fix one thing before an event. Everything here is judged by what they can
 tell at a glance: what a value holds, what a function takes, where a rule lives. Effort up front on
-a structure that gives them that is not the robustness 0009 declines; it is what 0009 is for. What
+a structure that gives them that is not the robustness this declines; it is what the rule is for. What
 is declined is defensive code — guards, retries, validation — against failures a handful of posts
 per event makes negligible. Structure makes reading cheaper; robustness makes failing rarer. The
 first outranks the second.
@@ -86,7 +86,7 @@ uv run scripts/api_types.py           # regenerate src/api_types.py from the ../
 ```
 
 Run it from the repo root and as a module or script, never `python src/main.py`: every import is
-absolute (`from src.…`), and `change_name_and_pfp` opens `images/<file>` relative to the CWD.
+absolute (`from src.…`).
 
 There is no test suite. `pyright` and `ruff check` are configured in `pyproject.toml` and clean; a
 change keeps them so. `ruff format` has not been applied repo-wide: a change formats the files it
@@ -137,7 +137,7 @@ defaults to 10). They are needed by `/event_setup`, `/update_host_for_event`,
 `/remove_host_from_event` and the `getResults_*` job; left empty, the three commands reply that the
 API is not configured, the job hands the unfilled results post to the validation channel, and the
 job-management commands are unaffected. Making them required would take the whole bot down, which
-is the bounded failure Plan 15 deliberately designed against — this bot is deployed on its own,
+is the failure this was designed to bound — this bot is deployed on its own,
 not together with the API.
 
 Known gap: `HOSTING_SCHEDULE_CHANNEL` and `HOSTING_SCHEDULE_MESSAGE_ID` are still absent from the
@@ -195,8 +195,8 @@ second run after a failure is safe. `slot_mapping.py` is the one place the API's
 lineup name)` meets `prix_info`; a `lineup` track list is filled only for a private Mini Prix,
 because a filled list is what makes the templates print the set and hand out a passcode.
 
-Post text for the 1hr, 10min, and event-results posts comes from the **database** (`event_messages`
-joined to `events`), not from code: `get_post_template` prefers a row matching the event's assigned
+Post text for the 1hr, 10min, and event-results posts comes from the **database** (`event_messages`,
+reached through the event's `event_id`, its template), not from code: `get_post_template` prefers a row matching the event's assigned
 `host_id` and falls back to the row with `host_id IS NULL`. Templates use `str.format` placeholders
 supplied by `TemplateMap.mapping` (`data/template_mapping.py`). Prix go/results posts are still
 built as f-strings in `build_gp_posts`.
@@ -216,7 +216,7 @@ Job names are the coupling glue: `f"{start_date:%Y-%m-%d} | {event}_{suffix}"` w
 `hostUpdate_<event>`. Grouping and cancellation work by substring / `rsplit("_", 1)` on the job id,
 so changing this convention breaks autocomplete, `/cancel_event_posts`, and `/validate_results`.
 The same string is rebuilt independently in `hostpost_commands.event_setup` as
-`scheduled_event_name` to look the event up in `events_scheduled.display_name`.
+`scheduled_event_name`; `get_scheduled_event_id` splits it back into the event's `name` and start date to find the row.
 
 Prix-results and FinalResults jobs are scheduled **paused**; `/post_prix_winner` and
 `/validate_results` resume them. `getResults_*` fires at scoreboard close, reads the event's
@@ -232,11 +232,11 @@ The APScheduler job store is **in memory** — a bot restart silently loses ever
 ### The FZD API
 
 `src/fzd_api.py` is an `aiohttp` client for `api.fzd.gg`. `/update_host_for_event` and
-`/remove_host_from_event` (task 15-04, the first bot commands in the project to move) `PUT` /
+`/remove_host_from_event` `PUT` /
 `DELETE /v1/events/{scheduled_event_id}/host`, sending the host's Discord snowflake and username,
 and the API resolves that to a row in `users` and writes `events_scheduled.host_id` itself. This
 bot never sees a `users.id`, which is why the commands were ported rather than handed an identity
-endpoint. `/event_setup` (task 19-06) reads the calendar (`GET /v1/events`), an event
+endpoint. `/event_setup` reads the calendar (`GET /v1/events`), an event
 (`GET /v1/events/{id}`), the in-game rotation and lineup offers (`GET /v1/ingame/…`) and the
 lineup catalogue (`GET /v1/lineups`), and writes the scoring and the schedule. The `getResults_*`
 job reads the ranked board (`GET /v1/events/{id}/scoreboard`), which is where multipliers and
@@ -266,12 +266,13 @@ manager over the pool, `execute_query` commits or rolls back per call. All acces
 the shared FZD schema — `events`, `events_scheduled`, `users`, `event_messages`, `hosts`. Results
 are not read from the database at all; they come from the API's scoreboard. The bot only reads
 events the FZD database has already scheduled; it cannot invent one. `get_scheduled_event_id` (a
-lookup by `events_scheduled.display_name`, rebuilt from the job name) is still what
+lookup by the event's `name` and start date, both rebuilt from the job name) is still what
 `autopost_commands` uses to find the event a job belongs to.
 
 Its `users` footprint is exactly one read-join, `get_hosting_schedule`, which reads the host's
 *tag* for display. The write path against `users` and against `events_scheduled.host_id` is gone;
-see the FZD API above.
+see the FZD API above. `hosts.bot_pfp` is the public URL of the host's image, on `media.fzd.gg`;
+the `hostUpdate_*` job fetches it and sets it as the bot's avatar, so no image lives in this repo.
 
 That schema is much larger than the slice HostPost touches, and dev/prod are not the same shape.
 Two sibling checkouts describe it. `../fzd-database` holds the hand-written SQL: table, view and
@@ -330,10 +331,10 @@ shape exists to satisfy, which of two readings of a value is meant.
 Never in a comment:
 
 - **Progress, tasks, plans or project decisions.** No task numbers, no "the plan
-  asks for this", no "decision 0009". Those live in `fzd-project` and describe
+  asks for this", no "per the decision record". Those live outside this repo and describe
   how the work is organised, not what the code does. A reason worth keeping is
   worth stating on its own; if it cannot be, it is not the code's business.
-  Prose in this repo's docs may still cite them.
+  The citations live in `CLAUDE.local.md`, which is not committed.
 - **The past — of the code, of the data, or of a decision.** No "used to be", no
   "split from", no "rows written before the rename", no "we decided". History
   goes out of date silently: nothing fails, nobody notices, and the next reader

@@ -17,7 +17,7 @@ StartLimitBurst=5
 Type=simple
 User=hostpost
 Group=hostpost
-# The repo root: imports are `src.…` and the bot opens `images/…` relative to it.
+# The repo root: imports are `src.…`.
 WorkingDirectory=/opt/hostpost/app
 # Secrets. The non-secret settings are app/.env, which the bot reads itself.
 EnvironmentFile=/opt/hostpost/.env

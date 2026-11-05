@@ -6,6 +6,7 @@ Module for Class PostScheduler.
 
 import asyncio
 
+import aiohttp
 import discord
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord import app_commands
@@ -228,9 +229,9 @@ class PostScheduler(commands.Cog):
             self.remove_event_jobs(event_name)
 
     async def change_name_and_pfp(self, interaction: discord.Interaction, host_info: HostInfo):
-        # new_pfp = discord.File(fp=f"images/{host_info["bot_pfp_filename"]}",filename=host_info["bot_pfp_filename"])
-        with open(f"images/{host_info['bot_pfp_filename']}", "rb") as image_file:
-            new_pfp = image_file.read()
+        async with aiohttp.ClientSession() as session, session.get(host_info["bot_pfp_url"]) as response:
+            response.raise_for_status()
+            new_pfp = await response.read()
         assert interaction.guild is not None and self.bot.user is not None
         await interaction.guild.me.edit(nick=host_info["bot_display_name"])
         await self.bot.user.edit(avatar=new_pfp)
