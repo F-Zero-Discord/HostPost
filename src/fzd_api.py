@@ -83,7 +83,7 @@ class FzdApi:
 
     # --- scheduled events -------------------------------------------------
 
-    async def calendar(self, days: int = 14) -> list[EventResponse]:
+    async def calendar(self, days: int = 7) -> list[EventResponse]:
         """The scheduled events not yet over, earliest first."""
         return await self._request("GET", "/v1/events", params={"days": days})
 

@@ -27,7 +27,8 @@ TEST_MODE_NOTICE = (
 
 logger = logging.getLogger(__name__)
 
-CALENDAR_DAYS = 14
+# A rolling week: the events a host sets up next. The API writes the weeklies further out than this.
+CALENDAR_DAYS = 7
 # Discord's limits on a choice: `events.name` is `varchar(120)`, so the label can pass the first.
 MAX_CHOICE_NAME = 100
 MAX_CHOICES = 25

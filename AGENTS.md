@@ -168,10 +168,15 @@ global APScheduler (`bot.scheduler`), then loads three cogs and force-syncs the 
 ### Event setup
 
 `/event_setup <event>` → `EventSetupView` (`views/event_setup.py`), a Components V2 `LayoutView`:
-a type-and-lobbies page, a settings modal, and one schedule page with a cursor over the slots. `EVENT_TYPES` and
-`LOBBIES` at the top of the file are how FZD runs events, not what the API admits; widening a
-type's lobbies is an edit there and a stage run. A modal asks what is typed or fixed, the message
-what depends on the API's answer for a minute, because a modal cannot change while it is open. At
+a summary page showing the settings the event's template configured, with a settings modal behind
+a button, then a type-and-lobbies page, then one schedule page with a cursor over the slots.
+`EVENT_TYPES` and `LOBBIES` at the top of the file are how FZD runs events, not what the API admits;
+widening a type's lobbies is an edit there and a stage run. A modal asks what is typed or fixed, the
+message what depends on the API's answer for a minute, because a modal cannot change while it is
+open. A Classic Mini Prix event gets its own schedule page: the private rotation's offers from the
+first slot, read once and shown as a table of the first hour or to twenty minutes past the latest
+pick, and the minutes the next prix can start in as buttons, cut from that read rather than asked
+of the API per slot. At
 Confirm it sends `PUT /v1/events/{id}/scoring` and `PUT /v1/events/{id}/schedule`, shows the slots
 the second answers, and a last `posting` page asks autopost and validation. The command awaits the
 view and hands those slots to the post pipeline below, answering through the view's

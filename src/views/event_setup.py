@@ -2,11 +2,11 @@
 The /event_setup wizard: one ephemeral Components V2 message, rebuilt on every
 click.
 
-The host picks the type of event, answers one modal of settings, then builds
-the schedule on one page. The draft is view state until Confirm, and nothing is
-written before it. A modal asks what is typed or fixed; the message asks what
-depends on the API's answer for a minute, because a modal cannot change while
-it is open.
+The host confirms the settings the event's template gave it, picks the type of
+event, then builds the schedule on one page. The draft is view state until
+Confirm, and nothing is written before it. A modal asks what is typed or fixed;
+the message asks what depends on the API's answer for a minute, because a modal
+cannot change while it is open.
 
 Every handler that asks the API defers first: a hop from the Raspberry Pi to the
 VPS can outrun Discord's three-second interaction window.
@@ -84,16 +84,34 @@ RACE_GAP = 5
 RACE_OFFER_LOOKAHEAD_MINUTES = 9
 PUBLIC_PRIX_LOOKAHEAD_MINUTES = 180
 PUBLIC_PRIX_SHOWN = 6
+# A private Classic Mini Prix takes about ten minutes, so the next one is
+# offered from ten minutes after the one before it. The minutes of one window
+# are the buttons: two rows of five.
+CLASSIC_GAP = 10
+CLASSIC_WINDOW = 10
+# The offers are read once, this far from the first slot. The table shows the
+# first hour of them, or to one gap and window past the latest pick, so the
+# minutes on the buttons are always rows on show. The read's cap keeps the page
+# under Discord's 4000 text characters; a row is about 27 of them.
+CLASSIC_TABLE_READ_MINUTES = 100
+CLASSIC_TABLE_SHOWN_MINUTES = 60
+CLASSIC_TABLE_PAST_PICK_MINUTES = CLASSIC_GAP + CLASSIC_WINDOW
 # What a slot's result can be worth on a Grand Prix and Mini Prix event: how
 # FZD runs it, not what the API admits. Widening it is an edit here.
 MULTIPLIERS = (1, 2, 3)
 BUTTONS_PER_ROW = 5
 SELECT_LIMIT = 25
+MODAL_TITLE_LIMIT = 45
 
 CLASSIC_MINI_PRIX = "cMP"
+# How a Classic Mini Prix draft names itself in the schedule; the table and the
+# buttons show the lineup alone.
+CLASSIC_PREFIX = "Classic Mini Prix: "
 SCHEDULE_HEADING = "### Schedule\nHere you can see the schedule as you fill it out."
 MACHINE_MASTERY_RULE = "Machine Mastery: each machine's score counts once; a repeated machine keeps its best."
 MACHINE_MASTERY_HINT = "Each machine's score counts once; a repeated one keeps its best. Points scoring only."
+MULLIGANS_HINT = "Results dropped before totalling."
+SCORING_LABELS = {"points": "🎯 Points", "time": "⏱️ Time", None: "not chosen"}
 
 
 @dataclass
@@ -135,6 +153,24 @@ class League:
 
     name: str
     lineup_id: int
+
+
+@dataclass(frozen=True)
+class ClassicOffer:
+    """One minute of the private Classic Mini Prix rotation: a row of the table."""
+
+    starts_at: datetime
+    lineup: str
+
+    def draft(self, offered_from: datetime) -> SlotDraft:
+        return SlotDraft(
+            f"{CLASSIC_PREFIX}{self.lineup}",
+            self.starts_at,
+            "private",
+            mode=CLASSIC_MINI_PRIX,
+            emoji_name=prix_emoji_name("Classic Mini Prix", None),
+            offered_from=offered_from,
+        )
 
 
 def parse_instant(value: str) -> datetime:
@@ -217,8 +253,7 @@ class SettingsModal(WizardModal):
     another's answer: each says when it applies, and is ignored otherwise."""
 
     def __init__(self, wizard: EventSetupView, *, scoring_only: bool) -> None:
-        assert wizard.event_type is not None
-        super().__init__(wizard, title=f"{EVENT_TYPES[wizard.event_type]}, {wizard.lobbies} lobbies")
+        super().__init__(wizard, title=wizard.event_name[:MODAL_TITLE_LIMIT])
 
         self.first_slot: discord.ui.TextInput | None = None
         if not scoring_only:
@@ -257,7 +292,7 @@ class SettingsModal(WizardModal):
         self.add_item(
             discord.ui.Label(
                 text="Mulligans",
-                description="Results dropped before totalling. Ignored with Machine Mastery.",
+                description=f"{MULLIGANS_HINT} Ignored with Machine Mastery.",
                 component=self.mulligans,
             )
         )
@@ -272,9 +307,9 @@ class SettingsModal(WizardModal):
 
 
 class EventSetupView(discord.ui.LayoutView):
-    """Pages: `type`, `schedule` (with `multipliers` as a side page), then
-    `posting`. Confirm writes; `posting` asks how the event's posts go out and
-    ends the wizard.
+    """Pages: `summary`, `type`, `schedule` (with `multipliers` as a side
+    page), then `posting`. Confirm writes; `posting` asks how the event's posts
+    go out and ends the wizard.
 
     When the view stops, `slots` is the schedule the API answered after the
     write, or None if nothing was written. `prix_list` and `autopost` are set
@@ -295,8 +330,8 @@ class EventSetupView(discord.ui.LayoutView):
         self.ends_at = parse_instant(detail["ends_at"])
         self.existing_slots = detail["slots"]
 
-        # Settings. Scoring is pre-filled from what the event already has; the
-        # typed fields are kept as typed, so a modal that did not validate
+        # Settings, pre-filled from the event, which its template configured.
+        # The typed fields are kept as typed, so a modal that did not validate
         # reopens with the host's input rather than the last good value.
         self.event_type: EventType | None = None
         self.lobbies: Lobbies | None = None
@@ -324,6 +359,7 @@ class EventSetupView(discord.ui.LayoutView):
         # the slot's neighbours, as opposed to offering nothing.
         self.offered_outside = False
         self.private_leagues: list[League] = []
+        self.classic_offers: list[ClassicOffer] = []
         self.public_entries: list[SlotDraft] = []
         self.public_picks: list[int] = []
         # Choices made on the multipliers page, by slot index, until Done.
@@ -335,7 +371,7 @@ class EventSetupView(discord.ui.LayoutView):
         self.autopost: bool | None = None
         self.validate = True
 
-        self.page = "type"
+        self.page = "summary"
         self.build()
 
     # --- plumbing ---------------------------------------------------------
@@ -348,9 +384,8 @@ class EventSetupView(discord.ui.LayoutView):
     @property
     def offered_by_minute(self) -> bool:
         """Whether a slot's candidates each carry their own minute, so the slot
-        starts at the pick: a race, or a private Classic Mini Prix, whose set
-        moves every minute."""
-        return self.kind == "race" or self.event_type == "cmp"
+        starts at the pick: a race."""
+        return self.kind == "race"
 
     @property
     def public_prix(self) -> bool:
@@ -460,7 +495,7 @@ class EventSetupView(discord.ui.LayoutView):
         return f"{hhmm(draft.starts_at)} {draft.lobby} {draft.name}{multiplier_suffix(draft.multiplier)}"
 
     def header(self) -> str:
-        return f"## {self.event_name}, scheduled {discord_timestamp(self.starts_at, 'long')}"
+        return f"## {self.event_name} {discord_timestamp(self.starts_at, 'long')}"
 
     def scoring_line(self) -> str:
         parts = [self.scoring or "not chosen"]
@@ -474,6 +509,57 @@ class EventSetupView(discord.ui.LayoutView):
         box = discord.ui.Container()
         getattr(self, f"build_{self.page}")(box)
         self.add_item(box)
+
+    # --- page: the summary --------------------------------------------------
+
+    def build_summary(self, box: discord.ui.Container) -> None:
+        lines = [
+            self.header(),
+            "**Start time:**",
+            f"UTC: {hhmm(self.first_start)}",
+            f"Local: {discord_timestamp(self.first_start, 'short')}",
+            "",
+            f"**Scoring: {SCORING_LABELS[self.scoring]}**",
+        ]
+        # The scoring's details are one quote block; a blank line ends it.
+        details: list[str] = []
+        if self.scoring == "time":
+            cap = f"{self.max_time_loss_cs / 100:g} s" if self.max_time_loss_cs else "no cap"
+            details += [f"Maximum time loss: {cap}", ""]
+        if self.machine_mastery:
+            details += ["Machine Mastery: ✅", f"-# {MACHINE_MASTERY_HINT}"]
+        else:
+            details += [f"Mulligans: {self.mulligans}", f"-# {MULLIGANS_HINT}", "", "Machine Mastery: ❌"]
+        lines += [f"> {detail}" for detail in details]
+        if self.notice:
+            lines.append(f"\n⚠️ {self.notice}")
+            self.notice = None
+        box.add_item(discord.ui.TextDisplay("\n".join(lines)))
+        box.add_item(discord.ui.Separator())
+        box.add_item(
+            discord.ui.ActionRow(
+                self.button("Cancel", self.on_cancel),
+                self.button("Change settings", self.on_change_settings, style=discord.ButtonStyle.primary),
+                self.button(
+                    "Looks good!",
+                    self.on_looks_good,
+                    style=discord.ButtonStyle.success,
+                    # A placement event takes no results; it needs points or time chosen first.
+                    disabled=self.scoring is None,
+                ),
+            )
+        )
+
+    async def on_change_settings(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(SettingsModal(self, scoring_only=False))
+
+    async def on_looks_good(self, interaction: discord.Interaction) -> None:
+        self.page = "type"
+        await self.show(interaction)
+
+    async def on_back_to_summary(self, interaction: discord.Interaction) -> None:
+        self.page = "summary"
+        await self.show(interaction)
 
     # --- page: the type -----------------------------------------------------
 
@@ -504,26 +590,20 @@ class EventSetupView(discord.ui.LayoutView):
                     )
                 )
             )
-        if self.notice:
-            box.add_item(discord.ui.TextDisplay(f"⚠️ {self.notice}"))
-            self.notice = None
-            box.add_item(
-                discord.ui.ActionRow(
-                    self.button("Fix settings", self.on_fix_settings, style=discord.ButtonStyle.primary)
-                )
-            )
         box.add_item(discord.ui.Separator())
-        box.add_item(discord.ui.ActionRow(self.button("Cancel", self.on_cancel)))
+        box.add_item(
+            discord.ui.ActionRow(self.button("Cancel", self.on_cancel), self.button("◀ Back", self.on_back_to_summary))
+        )
 
     def type_chooser(self, event_type: EventType, lobby: Lobbies) -> Handler:
         async def choose(interaction: discord.Interaction) -> None:
             self.event_type, self.lobbies = event_type, lobby
-            await interaction.response.send_modal(SettingsModal(self, scoring_only=False))
+            if event_type in POINTS_ONLY:
+                self.scoring = "points"
+                self.max_time_loss_cs = None
+            await self.call_then_show(interaction, self.begin_schedule)
 
         return choose
-
-    async def on_fix_settings(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(SettingsModal(self, scoring_only=False))
 
     async def on_cancel(self, interaction: discord.Interaction) -> None:
         await self.finish(interaction, "Nothing changed.")
@@ -540,10 +620,7 @@ class EventSetupView(discord.ui.LayoutView):
             self.first_slot_text = modal.first_slot.value.strip()
 
         self.notice = self.read_settings()
-        if self.notice or modal.first_slot is None:
-            await self.show(interaction)
-        else:
-            await self.call_then_show(interaction, self.begin_schedule)
+        await self.show(interaction)
 
     def read_settings(self) -> str | None:
         """Parse what the modal left as text. Answers the sentence for the
@@ -594,7 +671,18 @@ class EventSetupView(discord.ui.LayoutView):
                 # A private lobby cannot start Secret GP, the league with glitch tracks.
                 if league["name"] is not None and not any(track["type"] == "glitch" for track in league["tracks"])
             ]
+        if self.event_type == "cmp":
+            await self.load_classic_offers()
         await self.enter_slot()
+
+    async def load_classic_offers(self) -> None:
+        offers = await self.api.lineup_offers(
+            CLASSIC_MINI_PRIX,
+            lobby="private",
+            now=self.first_start,
+            lookahead_minutes=CLASSIC_TABLE_READ_MINUTES - 1,
+        )
+        self.classic_offers = [ClassicOffer(parse_instant(offer["starts_at"]), offer["lineup"]) for offer in offers]
 
     async def load_public_entries(self) -> None:
         entries = await self.api.rotation(
@@ -667,20 +755,9 @@ class EventSetupView(discord.ui.LayoutView):
                 for offer in offers
             ] or await self.placeholder_minutes(mode, at)
         elif self.event_type == "cmp":
-            offers = await self.api.lineup_offers(
-                CLASSIC_MINI_PRIX, lobby="private", now=at, lookahead_minutes=RACE_OFFER_LOOKAHEAD_MINUTES
-            )
-            offered = [
-                SlotDraft(
-                    f"Classic Mini Prix: {offer['lineup']}",
-                    parse_instant(offer["starts_at"]),
-                    "private",
-                    mode=CLASSIC_MINI_PRIX,
-                    emoji_name=prix_emoji_name("Classic Mini Prix", None),
-                    offered_from=at,
-                )
-                for offer in offers
-            ]
+            # One window of the table, which `load_classic_offers` read once.
+            until = at + timedelta(minutes=CLASSIC_WINDOW)
+            offered = [offer.draft(at) for offer in self.classic_offers if at <= offer.starts_at < until]
         else:
             if self.lobbies == "mixed":
                 entries = await self.api.rotation(at, kind="prix", lookahead_minutes=0)
@@ -774,6 +851,8 @@ class EventSetupView(discord.ui.LayoutView):
         box.add_item(discord.ui.Separator())
         if self.public_prix:
             self.build_public_prix(box)
+        elif self.event_type == "cmp":
+            self.build_classic(box)
         else:
             self.build_slot(box)
 
@@ -839,16 +918,7 @@ class EventSetupView(discord.ui.LayoutView):
         line = f"You can pick from the available selection here. {starts}"
         notes = []
         if self.offered_outside:
-            before, after = self.neighbours()
-            window = " and ".join(
-                part
-                for part in (
-                    f"after slot {number - 1} ({hhmm(before)} UTC)" if before else "",
-                    f"before slot {number + 1} ({hhmm(after)} UTC)" if after else "",
-                )
-                if part
-            )
-            notes.append(f"Slot {number} has to start {window}. Choose another time.")
+            notes.append(self.outside_note(number))
         elif self.kind == "race" and not self.candidates:
             notes.append(
                 f"The game offers no {RACE_MODE_NAMES[self.slot_mode]} race in a {self.lobbies} lobby "
@@ -910,16 +980,84 @@ class EventSetupView(discord.ui.LayoutView):
                 )
             )
 
-        box.add_item(
-            discord.ui.ActionRow(
-                self.button("◀ Back", self.mover(-1), disabled=self.cursor == 0),
-                self.button("Forward ▶", self.mover(1), disabled=editing is None),
-                self.button("Exact time", self.on_exact_time),
-                self.button(
-                    "Remove this slot", self.on_remove, style=discord.ButtonStyle.danger, disabled=editing is None
-                ),
+        box.add_item(self.slot_nav_row(editing))
+
+    def outside_note(self, number: int) -> str:
+        """The sentence for offers that all fall outside the cursor's neighbours."""
+        before, after = self.neighbours()
+        window = " and ".join(
+            part
+            for part in (
+                f"after slot {number - 1} ({hhmm(before)} UTC)" if before else "",
+                f"before slot {number + 1} ({hhmm(after)} UTC)" if after else "",
             )
+            if part
         )
+        return f"Slot {number} has to start {window}. Choose another time."
+
+    def slot_nav_row(self, editing: SlotDraft | None) -> discord.ui.ActionRow:
+        return discord.ui.ActionRow(
+            self.button("◀ Back", self.mover(-1), disabled=self.cursor == 0),
+            self.button("Forward ▶", self.mover(1), disabled=editing is None),
+            self.button("Exact time", self.on_exact_time),
+            self.button("Remove this slot", self.on_remove, style=discord.ButtonStyle.danger, disabled=editing is None),
+        )
+
+    # --- page: the schedule, Classic Mini Prix ------------------------------
+
+    # The whole table of offers is on the page, picks marked, so the host can
+    # see which minute favours which machine before choosing any of them. Under
+    # it the minutes one prix can start at are buttons, so a pick is a click on
+    # a row of the table. The cursor works as on the slot page.
+
+    def build_classic(self, box: discord.ui.Container) -> None:
+        editing = self.drafts[self.cursor] if self.cursor < len(self.drafts) else None
+        number = self.cursor + 1
+        at = self.slot_time
+        picked = {draft.starts_at for draft in self.drafts}
+        shown_until = self.first_start + timedelta(minutes=CLASSIC_TABLE_SHOWN_MINUTES)
+        if self.drafts:
+            past_pick = self.drafts[-1].starts_at + timedelta(minutes=CLASSIC_TABLE_PAST_PICK_MINUTES)
+            shown_until = max(shown_until, past_pick)
+        rows = [
+            f"{'*' if offer.starts_at in picked else ' '} {hhmm(offer.starts_at)}  {offer.lineup}"
+            for offer in self.classic_offers
+            if offer.starts_at < shown_until
+        ]
+        box.add_item(discord.ui.TextDisplay("### The offers, UTC\n```\n" + "\n".join(rows) + "\n```"))
+
+        heading = f"### Editing: prix {number}" if editing else f"### Prix {number} can start at"
+        notes = [
+            f"The minutes from {hhmm(at)} UTC ({discord_timestamp(at, 'short')} your time). Exact time moves them."
+        ]
+        if self.offered_outside:
+            notes.append(self.outside_note(number))
+        elif not self.candidates:
+            first, last = self.classic_offers[0].starts_at, self.classic_offers[-1].starts_at
+            notes.append(f"The table runs {hhmm(first)} to {hhmm(last)} UTC. Choose a time in it.")
+        if editing:
+            notes.append("Pick to replace it and move on, or Forward to keep it.")
+        box.add_item(discord.ui.TextDisplay("\n".join([heading, *notes])))
+
+        buttons = [
+            self.button(
+                f"{hhmm(candidate.starts_at)} {candidate.name.removeprefix(CLASSIC_PREFIX)}",
+                self.picker(index),
+                style=discord.ButtonStyle.success
+                if editing and candidate.same_pick(editing)
+                else discord.ButtonStyle.secondary,
+            )
+            for index, candidate in enumerate(self.candidates)
+        ]
+        for start in range(0, len(buttons), BUTTONS_PER_ROW):
+            box.add_item(discord.ui.ActionRow(*buttons[start : start + BUTTONS_PER_ROW]))
+        box.add_item(self.slot_nav_row(editing))
+
+    def picker(self, index: int) -> Handler:
+        async def pick(interaction: discord.Interaction) -> None:
+            await self.put(interaction, self.candidates[index])
+
+        return pick
 
     def candidate_label(self, candidate: SlotDraft, editing: SlotDraft | None) -> str:
         label = f"{hhmm(candidate.starts_at)} {candidate.name}"
@@ -958,6 +1096,8 @@ class EventSetupView(discord.ui.LayoutView):
         ]
 
     def default_gap(self) -> timedelta:
+        if self.event_type == "cmp":
+            return timedelta(minutes=CLASSIC_GAP)
         return timedelta(minutes=RACE_GAP if self.kind == "race" else PRIX_GAP)
 
     async def put(self, interaction: discord.Interaction, draft: SlotDraft) -> None:
