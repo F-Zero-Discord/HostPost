@@ -22,6 +22,7 @@ access_roles = [
     1379213282984071169, # FZD Luminary
     1203448624000798750, # Staff Ghost
     1152973858773663744, # Mr. Zero
+    1557906154661871786, # Track Architect
     1175813598040297483, # Captain Fox
 ]
 
