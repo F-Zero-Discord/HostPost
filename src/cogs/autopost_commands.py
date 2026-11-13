@@ -12,7 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord import app_commands
 from discord.ext import commands
 
-from src.data.event_post_text import access_roles
+from src.data.event_post_text import ROLE_REFUSAL, access_roles
 from src.data.slot_mapping import Prix
 from src.fzd_api import FzdApiError
 from src.fzd_db import (
@@ -470,9 +470,7 @@ class PostScheduler(commands.Cog):
     @push_job.error
     async def role_error(self, interaction: discord.Interaction, error):
         if isinstance(error, app_commands.MissingAnyRole):
-            await interaction.response.send_message(
-                "This command is Circuit Crew only. Hit up a mod if you want to join Circuit Crew.", ephemeral=True
-            )
+            await interaction.response.send_message(ROLE_REFUSAL, ephemeral=True)
         else:
             raise error
 

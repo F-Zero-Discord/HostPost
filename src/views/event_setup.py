@@ -24,7 +24,7 @@ from typing import Any, Literal, Protocol
 
 import discord
 
-from src.api_types import EventDetailResponse, LobbyKind, SlotEntryRequest, SlotResponse
+from src.api_types import EventDetailResponse, EventMode, LobbyKind, SlotEntryRequest, SlotResponse
 from src.data.event_post_text import events
 from src.data.slot_mapping import Prix, prix_emoji_name, prix_list_from_slots
 from src.error_alerts import send_error_alert
@@ -66,6 +66,12 @@ LOBBIES: dict[EventType, tuple[Lobbies, ...]] = {
     "cmp": ("private",),
     "race": ("public", "private"),
     "tb": ("public", "private"),
+}
+# The types an event of each mode can be. fzd-web's event setup page applies
+# the same rule on its own; a change here is a change there.
+TYPES_BY_MODE: dict[EventMode, tuple[EventType, ...]] = {
+    "99": ("gpmp", "race", "tb"),
+    "classic": ("cmp",),
 }
 # Scored on points by how FZD runs it; the modal does not ask.
 POINTS_ONLY: set[EventType] = {"tb"}
@@ -307,8 +313,9 @@ class SettingsModal(WizardModal):
 
 
 class EventSetupView(discord.ui.LayoutView):
-    """Pages: `summary`, `type`, `schedule` (with `multipliers` as a side
-    page), then `posting`. Confirm writes; `posting` asks how the event's posts
+    """Pages: `summary`, `type` (skipped when the event's mode leaves one type
+    in one lobby kind), `schedule` (with `multipliers` as a side page), then
+    `posting`. Confirm writes; `posting` asks how the event's posts
     go out and ends the wizard.
 
     When the view stops, `slots` is the schedule the API answered after the
@@ -316,7 +323,9 @@ class EventSetupView(discord.ui.LayoutView):
     only when the host answered `posting`, and the caller builds the posts.
     """
 
-    def __init__(self, bot: HostBot, interaction: discord.Interaction, detail: EventDetailResponse) -> None:
+    def __init__(
+        self, bot: HostBot, interaction: discord.Interaction, detail: EventDetailResponse, host: str | None
+    ) -> None:
         super().__init__(timeout=WIZARD_TIMEOUT_SECONDS)
         self.bot = bot
         self.api = bot.api
@@ -326,9 +335,13 @@ class EventSetupView(discord.ui.LayoutView):
 
         self.event_id = detail["scheduled_event_id"]
         self.event_name = detail["event"]
+        self.mode: EventMode = detail["mode"]
         self.starts_at = parse_instant(detail["starts_at"])
         self.ends_at = parse_instant(detail["ends_at"])
         self.existing_slots = detail["slots"]
+        # Who hosted when the setup began, None for nobody: Confirm makes the
+        # invoker host only then, and does not read it again.
+        self.host = host
 
         # Settings, pre-filled from the event, which its template configured.
         # The typed fields are kept as typed, so a modal that did not validate
@@ -367,6 +380,7 @@ class EventSetupView(discord.ui.LayoutView):
 
         # Outcome.
         self.slots: list[SlotResponse] | None = None
+        self.host_line = ""
         self.prix_list: list[Prix] | None = None
         self.autopost: bool | None = None
         self.validate = True
@@ -531,6 +545,14 @@ class EventSetupView(discord.ui.LayoutView):
         else:
             details += [f"Mulligans: {self.mulligans}", f"-# {MULLIGANS_HINT}", "", "Machine Mastery: ❌"]
         lines += [f"> {detail}" for detail in details]
+        # Here and not on the type page, which a classic event skips.
+        if self.existing_slots:
+            listed = "\n".join(f"{index}. {describe_slot(slot)}" for index, slot in enumerate(self.existing_slots, 1))
+            lines.append(
+                f"\n⚠️ This event already has a schedule:\n{listed}\n"
+                "Confirm replaces every slot listed, any of a type this event does not offer included; "
+                "nothing changes before then. The API refuses the replacement once a result has been recorded."
+            )
         if self.notice:
             lines.append(f"\n⚠️ {self.notice}")
             self.notice = None
@@ -554,6 +576,16 @@ class EventSetupView(discord.ui.LayoutView):
         await interaction.response.send_modal(SettingsModal(self, scoring_only=False))
 
     async def on_looks_good(self, interaction: discord.Interaction) -> None:
+        await self.ask_type(interaction)
+
+    async def ask_type(self, interaction: discord.Interaction) -> None:
+        """The type page, or straight to the schedule when the event's mode
+        leaves one type in one lobby kind: a classic event is a private
+        Classic Mini Prix."""
+        offered = TYPES_BY_MODE[self.mode]
+        if len(offered) == 1 and len(LOBBIES[offered[0]]) == 1:
+            await self.type_chooser(offered[0], LOBBIES[offered[0]][0])(interaction)
+            return
         self.page = "type"
         await self.show(interaction)
 
@@ -564,18 +596,9 @@ class EventSetupView(discord.ui.LayoutView):
     # --- page: the type -----------------------------------------------------
 
     def build_type(self, box: discord.ui.Container) -> None:
-        lines = [self.header()]
-        if self.existing_slots:
-            listed = "\n".join(f"{index}. {describe_slot(slot)}" for index, slot in enumerate(self.existing_slots, 1))
-            lines.append(
-                f"⚠️ This event already has a schedule:\n{listed}\n"
-                "Continuing replaces it at Confirm; nothing changes before then. "
-                "The API refuses the replacement once a result has been recorded."
-            )
-        lines.append("### What kind of event is this, and in which lobbies?")
-        box.add_item(discord.ui.TextDisplay("\n".join(lines)))
-        for event_type, label in EVENT_TYPES.items():
-            box.add_item(discord.ui.TextDisplay(f"**{label}**"))
+        box.add_item(discord.ui.TextDisplay(f"{self.header()}\n### What kind of event is this, and in which lobbies?"))
+        for event_type in TYPES_BY_MODE[self.mode]:
+            box.add_item(discord.ui.TextDisplay(f"**{EVENT_TYPES[event_type]}**"))
             box.add_item(
                 discord.ui.ActionRow(
                     *(
@@ -1147,11 +1170,11 @@ class EventSetupView(discord.ui.LayoutView):
         await self.show(interaction)
 
     async def on_start_over(self, interaction: discord.Interaction) -> None:
-        """Drop every slot entered so far and ask the type again."""
+        """Drop every slot entered so far and ask the type again, or begin the
+        schedule afresh when there is no type to ask."""
         self.drafts = []
         self.cursor = 0
-        self.page = "type"
-        await self.show(interaction)
+        await self.ask_type(interaction)
 
     async def on_confirm(self, interaction: discord.Interaction) -> None:
         if not self.drafts:
@@ -1178,6 +1201,7 @@ class EventSetupView(discord.ui.LayoutView):
                 f"The scoring was saved, but the schedule was not. {error}\nRun /event_setup again; both writes replace what is there.",
             )
             return
+        self.host_line = await self.take_host_if_free(interaction)
         self.slots = slots
         if self.event_name not in events:
             await self.finish(
@@ -1193,6 +1217,24 @@ class EventSetupView(discord.ui.LayoutView):
             return
         self.page = "posting"
         await self.show(interaction)
+
+    async def take_host_if_free(self, interaction: discord.Interaction) -> str:
+        """Make the invoker host of an event nobody hosted, and say who hosts.
+
+        A failure here leaves the scoring and schedule written; the line says so.
+        """
+        if self.host is not None:
+            return f"Host: {self.host}, unchanged."
+        try:
+            await self.api.assign_host(
+                self.event_id,
+                discord_user_id=interaction.user.id,
+                discord_user_name=interaction.user.name,
+                tag=interaction.user.display_name,
+            )
+        except FzdApiError as error:
+            return f"Host: not set. {error} Use /update_host_for_event to take it."
+        return f"Host: you, {interaction.user.display_name}."
 
     # --- page: multipliers --------------------------------------------------
 
@@ -1239,7 +1281,7 @@ class EventSetupView(discord.ui.LayoutView):
     def written(self) -> str:
         assert self.slots is not None
         listed = "\n".join(f"{index}. {describe_slot(slot)}" for index, slot in enumerate(self.slots, 1))
-        return f"{self.header()}\n{self.scoring_line()}\n### Schedule written\n{listed}"
+        return f"{self.header()}\n{self.scoring_line()}\n{self.host_line}\n### Schedule written\n{listed}"
 
     # --- page: posting ------------------------------------------------------
 

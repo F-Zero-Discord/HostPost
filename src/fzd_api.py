@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 API_KEY_HEADER = "X-API-Key"
 
+TAG_MAX_LENGTH = 10
+"""`users.tag` is `varchar(10)`, matching F-Zero 99's in-game name limit. The API
+rejects a longer one rather than truncating it, so `assign_host` trims."""
+
 
 class FzdApiError(Exception):
     """Something went wrong talking to the API.
@@ -126,14 +130,15 @@ class FzdApi:
         *,
         discord_user_id: int,
         discord_user_name: str,
-        tag: str | None = None,
+        tag: str,
     ) -> EventHostResponse:
         """Make a Discord account the host of a scheduled event. The API resolves
-        the account to a row in `users` itself; this bot never sees the id."""
+        the account to a row in `users` itself; this bot never sees the id.
+        `tag` is used only if the account has no row yet."""
         body = HostAssignmentRequest(
             discord_user_id=str(discord_user_id),
             discord_user_name=discord_user_name,
-            tag=tag,
+            tag=tag[:TAG_MAX_LENGTH],
         )
         return await self._request("PUT", f"/v1/events/{scheduled_event_id}/host", json=body)
 

@@ -12,8 +12,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.data.event_post_text import access_roles, help_text_1, help_text_2
+from src.data.event_post_text import ROLE_REFUSAL, access_roles, help_text_1, help_text_2
 from src.fzd_api import FzdApiError
+from src.fzd_db import get_db_connection, get_event_host_name
 from src.main import HostBot
 from src.settings import get_settings
 from src.utils.build_hostposts import build_posts
@@ -81,8 +82,11 @@ class EventBuilder(commands.Cog):
         except FzdApiError as error:
             await interaction.followup.send(str(error), ephemeral=True)
             return
+        # The event's detail does not carry its host.
+        async with get_db_connection(self.bot.db_pool) as db:
+            host = await get_event_host_name(db, detail["scheduled_event_id"])
 
-        view = EventSetupView(self.bot, interaction, detail)
+        view = EventSetupView(self.bot, interaction, detail, host)
         await interaction.followup.send(view=view, ephemeral=True)
         await view.wait()
         if view.prix_list is None or view.autopost is None:
@@ -106,10 +110,7 @@ class EventBuilder(commands.Cog):
     @event_setup.error
     async def role_error(self, interaction: discord.Interaction, error):
         if isinstance(error, app_commands.MissingAnyRole):
-            await interaction.response.send_message(
-                "This command is Circuit Crew only. Hit up a mod if you want to join Circuit Crew.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(ROLE_REFUSAL, ephemeral=True)
         else:
             raise error
 

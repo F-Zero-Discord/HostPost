@@ -203,6 +203,21 @@ async def get_event_host_id(db: aiomysql.Connection, scheduled_event_id: int) ->
         return None
 
 
+async def get_event_host_name(db: aiomysql.Connection, scheduled_event_id: int) -> str | None:
+    """The host's `users.tag`, else their Discord username; None with no host.
+
+    Both columns are nullable: a host who never set an in-game name has no tag.
+    """
+    sql_get_host_name = """
+                        SELECT COALESCE(users.tag, users.discord_user_name) AS host
+                        FROM events_scheduled e
+                        JOIN users ON e.host_id = users.id
+                        WHERE e.id = %s
+                    """
+    row = await execute_query(db, sql_get_host_name, params=(scheduled_event_id,), fetch="one", is_proc=False)
+    return row["host"] if row else None
+
+
 class HostInfo(TypedDict):
     bot_display_name: str
     bot_pfp_url: str

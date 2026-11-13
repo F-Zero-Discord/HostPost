@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.data.event_post_text import access_roles
+from src.data.event_post_text import ROLE_REFUSAL, access_roles
 from src.fzd_api import FzdApiError
 from src.fzd_db import HostingScheduleRow, get_db_connection, get_hosting_schedule
 from src.main import HostBot
@@ -17,10 +17,6 @@ from src.settings import get_settings
 from src.utils.hostpost_utils import discord_timestamp
 
 logger = logging.getLogger(__name__)
-
-TAG_MAX_LENGTH = 10
-"""`users.tag` is `varchar(10)`, matching F-Zero 99's in-game name limit. The API
-rejects a longer one rather than truncating it, so the trim happens here."""
 
 
 class HostingSchedule(commands.Cog):
@@ -197,7 +193,7 @@ class HostingSchedule(commands.Cog):
                 # nickname, the global name or the username, in that order, and is
                 # never None — unlike `host.nick`, which was indexed directly here
                 # and raised TypeError for any host without a server nickname.
-                tag=host.display_name[:TAG_MAX_LENGTH],
+                tag=host.display_name,
             )
         except FzdApiError as error:
             logger.error("update_host_for_event failed for event=%s host=%s: %s", event, host, error)
@@ -253,10 +249,7 @@ class HostingSchedule(commands.Cog):
     # @anchor_post.error
     async def role_error(self, interaction: discord.Interaction, error):
         if isinstance(error, app_commands.MissingAnyRole):
-            await interaction.response.send_message(
-                "This command is Circuit Crew only. Hit up a mod if you want to join Circuit Crew.",
-                ephemeral=True
-                )
+            await interaction.response.send_message(ROLE_REFUSAL, ephemeral=True)
         else:
             raise error
 

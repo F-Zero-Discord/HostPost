@@ -170,15 +170,22 @@ global APScheduler (`bot.scheduler`), then loads three cogs and force-syncs the 
 `/event_setup <event>` → `EventSetupView` (`views/event_setup.py`), a Components V2 `LayoutView`:
 a summary page showing the settings the event's template configured, with a settings modal behind
 a button, then a type-and-lobbies page, then one schedule page with a cursor over the slots.
-`EVENT_TYPES` and `LOBBIES` at the top of the file are how FZD runs events, not what the API admits;
-widening a type's lobbies is an edit there and a stage run. A modal asks what is typed or fixed, the
+`EVENT_TYPES`, `LOBBIES` and `TYPES_BY_MODE` at the top of the file are how FZD runs events, not
+what the API admits; widening a type's lobbies is an edit there and a stage run. The type page
+offers what the event's `mode` allows, and is skipped when that is one type in one lobby kind: a
+`classic` event goes straight to a private Classic Mini Prix schedule. fzd-web's setup page holds
+the same rule separately. A modal asks what is typed or fixed, the
 message what depends on the API's answer for a minute, because a modal cannot change while it is
 open. A Classic Mini Prix event gets its own schedule page: the private rotation's offers from the
 first slot, read once and shown as a table of the first hour or to twenty minutes past the latest
 pick, and the minutes the next prix can start in as buttons, cut from that read rather than asked
 of the API per slot. At
-Confirm it sends `PUT /v1/events/{id}/scoring` and `PUT /v1/events/{id}/schedule`, shows the slots
-the second answers, and a last `posting` page asks autopost and validation. The command awaits the
+Confirm it sends `PUT /v1/events/{id}/scoring` and `PUT /v1/events/{id}/schedule`, then, if the
+event had no host when the command started, `PUT /v1/events/{id}/host` with the invoker. The host
+is read from the database (`get_event_host_name`), since the event's detail does not carry it, and
+not read again at Confirm: someone who takes the event while the wizard is open is replaced. A
+failed host write is reported on the confirmation and the two writes before it stand. It shows the
+slots the schedule write answers, and a last `posting` page asks autopost and validation. The command awaits the
 view and hands those slots to the post pipeline below, answering through the view's
 `last_interaction` because the command's own token can expire while the wizard runs. An event
 missing from `events` or a slot `slot_mapping` has no shortname for (Pro Tracks, Team Battle) ends
@@ -243,7 +250,8 @@ and the API resolves that to a row in `users` and writes `events_scheduled.host_
 bot never sees a `users.id`, which is why the commands were ported rather than handed an identity
 endpoint. `/event_setup` reads the calendar (`GET /v1/events`), an event
 (`GET /v1/events/{id}`), the in-game rotation and lineup offers (`GET /v1/ingame/…`) and the
-lineup catalogue (`GET /v1/lineups`), and writes the scoring and the schedule. The `getResults_*`
+lineup catalogue (`GET /v1/lineups`), and writes the scoring, the schedule and, on an event
+with no host, the invoker as host. The `getResults_*`
 job reads the ranked board (`GET /v1/events/{id}/scoreboard`), which is where multipliers and
 mulligans are applied; the bot does not sum scores itself. Every method's
 return type is the `TypedDict` in `src/api_types.py` of the schema its endpoint answers, so the
@@ -260,7 +268,8 @@ Deliberate properties, all of them load-bearing:
   Discord's 3-second interaction window. `HostingSchedule.respond` exists because a deferred interaction can only be answered with a followup, and the same helpers
   are reached from both the deferred and the undeferred path.
 - The snowflake goes over the wire as a **string** — it exceeds 2^53 and fzd-web is also a client.
-- `tag` is trimmed to 10 characters here; the API rejects a longer one rather than truncating.
+- `tag` is trimmed to 10 characters in `FzdApi.assign_host`; the API rejects a longer one rather
+  than truncating.
 
 The client is built in `HostBot.setup_hook` as `bot.api` and closed in `HostBot.close`.
 
@@ -274,8 +283,8 @@ events the FZD database has already scheduled; it cannot invent one. `get_schedu
 lookup by the event's `name` and start date, both rebuilt from the job name) is still what
 `autopost_commands` uses to find the event a job belongs to.
 
-Its `users` footprint is exactly one read-join, `get_hosting_schedule`, which reads the host's
-*tag* for display. The write path against `users` and against `events_scheduled.host_id` is gone;
+It reads `users` only to name a host: `get_hosting_schedule` joins the host's *tag* for the
+board, and `get_event_host_name` the tag or Discord username for `/event_setup`. The write path against `users` and against `events_scheduled.host_id` is gone;
 see the FZD API above. `hosts.bot_pfp` is the public URL of the host's image, on `media.fzd.gg`;
 the `hostUpdate_*` job fetches it and sets it as the bot's avatar, so no image lives in this repo.
 

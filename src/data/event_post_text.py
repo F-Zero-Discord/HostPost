@@ -25,6 +25,8 @@ access_roles = [
     1557906154661871786, # Track Architect
     1175813598040297483, # Captain Fox
 ]
+# The reply to anyone without one of `access_roles`.
+ROLE_REFUSAL = "This command is for Circuit Crew and FZD staff. Hit up a mod if you want to join Circuit Crew."
 
 automatable_posts = ["1hr", "10min", "go_post"]
 
@@ -90,7 +92,7 @@ Classic Mini Prix, Single races or Team Battle, and its lobbies. A popup asks wh
 and the mulligans or Machine Mastery. The schedule page then offers what can run at each slot's time — the \
 leagues and Mini Prix the game runs, a private league or Mini Prix, 99 race pairs, Pro Tracks and \
 Team Battle races — and a pick is added straight away. Confirm writes the scoring and the schedule to the FZD database through \
-the API; the scoreboard reads the same slots. It then builds the event's posts, and can schedule them to post automatically.\n"
+the API; the scoreboard reads the same slots. If the event has no host, you become it. It then builds the event's posts, and can schedule them to post automatically.\n"
 )
 
 help_text_2 = (
