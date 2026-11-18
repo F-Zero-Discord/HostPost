@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.data.event_post_text import ROLE_REFUSAL, access_roles, help_text_1, help_text_2
+from src.data.event_post_text import access_roles, help_text_1, help_text_2
 from src.fzd_api import FzdApiError
 from src.fzd_db import get_db_connection, get_event_host_name
 from src.main import HostBot
@@ -106,13 +106,6 @@ class EventBuilder(commands.Cog):
     async def help(self, interaction: discord.Interaction):
         await interaction.response.send_message(help_text_1, ephemeral=True)
         await interaction.followup.send(help_text_2, ephemeral=True)
-
-    @event_setup.error
-    async def role_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.MissingAnyRole):
-            await interaction.response.send_message(ROLE_REFUSAL, ephemeral=True)
-        else:
-            raise error
 
     async def cog_load(self):
         self.event_setup.autocomplete("event")(self.event_autocomplete)

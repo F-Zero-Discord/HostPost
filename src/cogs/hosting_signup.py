@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.data.event_post_text import ROLE_REFUSAL, access_roles
+from src.data.event_post_text import access_roles
 from src.fzd_api import FzdApiError
 from src.fzd_db import HostingScheduleRow, get_db_connection, get_hosting_schedule
 from src.main import HostBot
@@ -241,18 +241,6 @@ class HostingSchedule(commands.Cog):
     #         discord.Object(id=int(get_settings().hosting_schedule_channel)).id)
     #     await post_channel.send(embed=schedule_board)
     #     await interaction.response.send_message("Anchor message sent.")
-
-
-    @hosting_schedule.error
-    @update_host_for_event.error
-    @remove_host_from_event.error
-    # @anchor_post.error
-    async def role_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.MissingAnyRole):
-            await interaction.response.send_message(ROLE_REFUSAL, ephemeral=True)
-        else:
-            raise error
-
 
     async def cog_load(self):
         self.update_host_for_event.autocomplete("event")(self.event_autocomplete)

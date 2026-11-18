@@ -221,7 +221,7 @@ is what actually gets posted. Nested triple-backticks inside a post will break t
 APScheduler holds the timing; `bot.job_stack` (a list of `QueuedPost`, on the bot) holds the text.
 The split exists so text stays editable after a job is queued — the fired callback `post_message`
 looks the message up by `job_name` at send time. Both must be kept in sync: `schedule_job` appends
-to the stack, `send_and_pop_message` and `remove_event_jobs` remove from it.
+to the stack, `post_message` and `remove_event_jobs` remove from it.
 
 Job names are the coupling glue: `f"{start_date:%Y-%m-%d} | {event}_{suffix}"` with suffixes `1hr`,
 `10min`, `Prix#N`, `Prix#NResults`, `FinalResults`, plus `getResults_<event>` and
@@ -318,7 +318,12 @@ button emoji never depends on an FZD id.
 ## Conventions and rough edges to expect
 
 - The codebase mixes `print` and `logging`; new code should use module-level `logger`, and errors
-  routed through `src/error_alerts.py` reach the configured alert channel.
+  routed through `src/error_alerts.py` reach the configured alert channel. The hooks that route there:
+  `HostBot.on_app_command_error`, set as `tree.on_error`, for commands (it also answers the role
+  check); the scheduler's `EVENT_JOB_ERROR` listener for jobs; and each view's and modal's own
+  `on_error` for clicks, which discord.py sends to neither of the others. A view or modal without
+  one fails silently, and a reply in an error path is wrapped in `suppress(discord.HTTPException)`,
+  since the error may be that the interaction can no longer be answered.
 - `hostpost_exports.prepare_post_outputs` constructs a **second** `PostScheduler(bot)` rather than
   fetching the loaded cog. It works only because the scheduler and job stack both live on `bot`.
 - The bot runs without the `members` intent and nothing should come to need it: winner mentions

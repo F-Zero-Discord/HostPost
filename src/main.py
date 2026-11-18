@@ -1,6 +1,8 @@
 # This is the event_helper bot, developed to assist hosts in developing posts.
 
 import argparse
+import asyncio
+import contextlib
 import logging
 import sys
 from datetime import datetime
@@ -8,10 +10,12 @@ from typing import TypedDict
 
 import aiomysql
 import discord
+from apscheduler.events import EVENT_JOB_ERROR, JobExecutionEvent
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord import app_commands
 from discord.ext import commands
 
+from src.data.event_post_text import ROLE_REFUSAL
 from src.error_alerts import send_error_alert
 from src.fzd_api import FzdApi
 from src.fzd_db import check_db_for_hosting_support, get_db_connection, init_db_pool
@@ -39,8 +43,17 @@ class HostBot(commands.Bot):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.job_stack: list[QueuedPost] = []
+        # The loop holds a task only weakly; this keeps a pending alert from being collected.
+        self.alert_tasks: set[asyncio.Task[None]] = set()
+        # The tree's error hook, not a bot event: discord.py dispatches no `app_command_error`.
+        self.tree.on_error = self.on_app_command_error
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        """Every command's errors, the role check included. A view's or a modal's
+        errors are not a command's and never reach here; each view has its own `on_error`."""
+        if isinstance(error, app_commands.MissingAnyRole):
+            await interaction.response.send_message(ROLE_REFUSAL, ephemeral=True)
+            return
         original_error = getattr(error, "original", error)
         logger.error(
             "Unhandled app command error for command=%s user=%s",
@@ -55,16 +68,28 @@ class HostBot(commands.Bot):
             interaction=interaction,
         )
 
-        if interaction.response.is_done():
-            await interaction.followup.send(
-                "ERROR! Something went wrong, contact FZD staff for help!",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                "ERROR! Something went wrong, contact FZD staff for help!",
-                ephemeral=True,
-            )
+        # The error may be that this interaction can no longer be answered.
+        with contextlib.suppress(discord.HTTPException):
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    "ERROR! Something went wrong, contact FZD staff for help!",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    "ERROR! Something went wrong, contact FZD staff for help!",
+                    ephemeral=True,
+                )
+
+    def alert_job_error(self, event: JobExecutionEvent) -> None:
+        """APScheduler calls its listeners on the event loop's thread, for a
+        coroutine job and a thread-pool job alike. It has already logged the traceback."""
+        assert event.exception is not None  # set on every EVENT_JOB_ERROR
+        task = self.loop.create_task(
+            send_error_alert(self, where=f"scheduled job {event.job_id}", error=event.exception)
+        )
+        self.alert_tasks.add(task)
+        task.add_done_callback(self.alert_tasks.discard)
 
     async def setup_hook(self):
         """Called automatically at startup, safe for async setup."""
@@ -73,6 +98,7 @@ class HostBot(commands.Bot):
         try:
             self.db_pool = await init_db_pool()
             self.scheduler = await init_scheduler()
+            self.scheduler.add_listener(self.alert_job_error, EVENT_JOB_ERROR)
             # The FZD API. Built unconditionally: when it is not configured the
             # three commands that use it say so, and the others never ask.
             self.api = FzdApi(

@@ -12,7 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord import app_commands
 from discord.ext import commands
 
-from src.data.event_post_text import ROLE_REFUSAL, access_roles
+from src.data.event_post_text import access_roles
 from src.data.slot_mapping import Prix
 from src.fzd_api import FzdApiError
 from src.fzd_db import (
@@ -140,32 +140,17 @@ class PostScheduler(commands.Cog):
             if event_name in job["job_name"]:
                 self.bot.job_stack = [j for j in self.bot.job_stack if j.get("job_name") != job["job_name"]]
 
-    async def send_and_pop_message(self, channel, job_name, message):
-        """Runs entirely on the bot's main async loop."""
-        try:
-            # 1. Send the message
-            await channel.send(message)
-
-            # 2. Remove job information from the stack
-            self.bot.job_stack = [job for job in self.bot.job_stack if job.get("job_name") != job_name]
-
-        except Exception as e:
-            # If error occurs, the item stays in the stack
-            print(f"Failed to send scheduled message. Stack preserved. Error: {e}")
-
-    def post_message(self, job_name: str, channel_id: int) -> None:
-        """The method triggered when an event runs. Pulls the message from the
-        job stack (self.bot.job.stack). This allows for the user to modify the
-        message after the job has been queued.
-        """
+    async def post_message(self, job_name: str, channel_id: int) -> None:
+        """The job of id `job_name`. The text is read from the job stack at send
+        time, so it stays editable after the job is queued. A coroutine, so it runs
+        on the bot's loop and a failed send is the job's error, which alerts."""
         channel = self.bot.get_channel(channel_id)
-
-        # Confirm that job "job_name" is in the job stack
-        if any(job.get("job_name") == job_name for job in self.bot.job_stack):
-            message = [job["message"] for job in self.bot.job_stack if job["job_name"] == job_name]
-            asyncio.run_coroutine_threadsafe(self.send_and_pop_message(channel, job_name, message[0]), self.bot.loop)
-        else:
+        assert isinstance(channel, discord.TextChannel)
+        message = [job["message"] for job in self.bot.job_stack if job["job_name"] == job_name]
+        if not message:
             raise RuntimeError(f"Error: job {job_name} is not in the job stack and so cannot be executed.")
+        await channel.send(message[0])
+        self.bot.job_stack = [job for job in self.bot.job_stack if job["job_name"] != job_name]
 
     async def schedule_job(self, post_job: Autopost) -> None:
         # The act of scheduling is to add the job to the job stack ("self.bot.job_stack").
@@ -458,21 +443,6 @@ class PostScheduler(commands.Cog):
         await asyncio.sleep(2)  # sleep to ensure post made before job removed.
         self.bot.job_stack = [job for job in self.bot.job_stack if job.get("job_name") != job_name]
         await interaction.response.send_message(f"{job_name} pushed.")
-
-    # Error handling for if user does not have appropriate role
-    @list_all_autoposts.error
-    @cancel_all_posts.error
-    @list_autopost_events.error
-    @cancel_event_posts.error
-    @post_prix_winner.error
-    @edit_pending_autopost.error
-    @validate_results.error
-    @push_job.error
-    async def role_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.MissingAnyRole):
-            await interaction.response.send_message(ROLE_REFUSAL, ephemeral=True)
-        else:
-            raise error
 
     async def cog_load(self):
         self.cancel_event_posts.autocomplete("event_name")(self.eventpost_autocomplete)

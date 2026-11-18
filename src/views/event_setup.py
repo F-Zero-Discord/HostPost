@@ -429,7 +429,12 @@ class EventSetupView(discord.ui.LayoutView):
     async def fail(self, interaction: discord.Interaction, error: Exception, *, where: str) -> None:
         logger.error("event_setup wizard failed on %s", where, exc_info=error)
         await send_error_alert(self.bot, where="event_setup wizard", error=error, interaction=interaction)
-        await self.finish(interaction, "ERROR! Something went wrong, contact FZD staff for help!")
+        # A failed wizard builds no posts, whichever page it failed on.
+        self.autopost = None
+        # The error may be that this interaction can no longer be answered.
+        with contextlib.suppress(discord.HTTPException):
+            await self.finish(interaction, "ERROR! Something went wrong, contact FZD staff for help!")
+        self.stop()
 
     async def show(self, interaction: discord.Interaction) -> None:
         """Render the current page into the one message, whichever way this

@@ -2,7 +2,6 @@ import logging
 from collections.abc import Mapping
 
 import discord
-from discord.ext import commands
 
 from src.settings import get_settings
 
@@ -55,7 +54,7 @@ def _build_error_alert_message(
 
 
 async def send_error_alert(
-    bot: commands.Bot,
+    bot: discord.Client,
     *,
     where: str,
     error: BaseException,
